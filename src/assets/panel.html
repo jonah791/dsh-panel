@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSH Panel — 插件管理</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; background: #0f1117; color: #d8dee9; padding: 24px; }
+  header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  h1 { font-size: 20px; color: #88c0d0; font-weight: 600; }
+  .sub { color: #616e88; font-size: 12px; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  .btn { background: #2a3040; color: #d8dee9; border: 1px solid #3b4252; border-radius: 6px; padding: 6px 14px; cursor: pointer; font-size: 13px; transition: all .15s; }
+  .btn:hover { background: #3b4252; }
+  .btn.primary { background: #4c8ca8; border-color: #4c8ca8; color: #0f1117; font-weight: 600; }
+  .btn.danger { background: #3a2a2a; border-color: #8c4c4c; color: #e0a0a0; }
+  .btn.small { padding: 2px 8px; font-size: 12px; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .filters { display: flex; gap: 8px; margin-bottom: 12px; }
+  .filters input { background: #1a1f2e; border: 1px solid #3b4252; color: #d8dee9; border-radius: 6px; padding: 6px 10px; font-size: 13px; flex: 1; max-width: 320px; }
+  .filters select { background: #1a1f2e; border: 1px solid #3b4252; color: #d8dee9; border-radius: 6px; padding: 6px; font-size: 13px; }
+  .stats { color: #616e88; font-size: 12px; margin-left: auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
+  .card { background: #161b27; border: 1px solid #262e40; border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 8px; transition: border-color .15s; }
+  .card:hover { border-color: #3b5270; }
+  .card .top { display: flex; align-items: center; gap: 8px; }
+  .card .nm { font-weight: 600; font-size: 14px; color: #eceff4; font-family: "Cascadia Code", Consolas, monospace; word-break: break-all; }
+  .card .ver { color: #616e88; font-size: 11px; }
+  .badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+  .badge.mounted { background: #1d3a2a; color: #8fbc8f; border: 1px solid #2d5a3a; }
+  .badge.disabled { background: #3a3320; color: #d0b080; border: 1px solid #5a4c2d; }
+  .badge.unmounted { background: #2a2a35; color: #9099ab; border: 1px solid #3b4252; }
+  .badge.self { background: #1d2a3a; color: #7fb0d0; border: 1px solid #2d4a6a; }
+  .badge.official { background: #332a3a; color: #c0a0d0; border: 1px solid #5a3a6a; }
+  .badge.warn { background: #3a2020; color: #e08080; border: 1px solid #6a2d2d; }
+  .card .purpose { color: #9aa5b8; font-size: 12px; line-height: 1.5; }
+  .card .meta { display: flex; flex-wrap: wrap; gap: 4px 12px; color: #616e88; font-size: 11px; }
+  .card .tools { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tool-tag { background: #1a1f2e; border: 1px solid #2a3040; color: #7fb0d0; font-size: 10px; padding: 1px 6px; border-radius: 4px; font-family: Consolas, monospace; }
+  .card .actions { display: flex; gap: 6px; margin-top: 2px; flex-wrap: wrap; }
+  .card .cfg { background: #12161f; border: 1px solid #1e2434; border-radius: 6px; padding: 6px 8px; font-size: 11px; color: #7fb0d0; font-family: Consolas, monospace; max-height: 90px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+  #toast { position: fixed; bottom: 20px; right: 20px; background: #2a3040; border: 1px solid #4c8ca8; color: #d8dee9; padding: 10px 18px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 99; max-width: 420px; }
+  #toast.show { opacity: 1; }
+  #toast.err { border-color: #e08080; background: #3a2020; }
+  .empty { color: #616e88; text-align: center; padding: 40px; font-size: 14px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading { display: inline-block; width: 14px; height: 14px; border: 2px solid #4c8ca8; border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DSH Panel</h1>
+  <span class="sub">独立实时面板 · 插件管理</span>
+  <span class="stats" id="stats"></span>
+</header>
+
+<div class="bar">
+  <button class="btn primary" onclick="refresh()">⟳ 刷新</button>
+  <button class="btn" onclick="autoToggle()" id="autoBtn">自动刷新: 开</button>
+  <span class="sub">入口 http://127.0.0.1:3080/panel/ · 零官方 client 依赖</span>
+</div>
+
+<div class="filters">
+  <input id="search" placeholder="搜索插件名 / 工具 / 用途..." oninput="render()">
+  <select id="srcFilter" onchange="render()">
+    <option value="">全部来源</option>
+    <option value="self">自研</option>
+    <option value="official">官方</option>
+    <option value="unmounted">未挂载</option>
+  </select>
+</div>
+
+<div class="grid" id="grid"></div>
+<div id="toast"></div>
+
+<script>
+let STATE = null;
+let autoOn = true;
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => ({ ok: false, error: 'bad response' }));
+  if (!res.ok || data.ok === false) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+async function refresh() {
+  try {
+    const d = await api('/api/panel/state');
+    STATE = d;
+    render();
+    const m = d.plugins.filter(p => p.status === 'mounted').length;
+    const dis = d.plugins.filter(p => p.status === 'disabled').length;
+    const un = d.plugins.filter(p => p.status === 'unmounted').length;
+    document.getElementById('stats').textContent = '共 ' + d.plugins.length + ' · 已挂载 ' + m + ' · 停用 ' + dis + ' · 未挂载 ' + un;
+  } catch (e) {
+    toast(String(e.message || e), true);
+  }
+}
+
+function statusBadge(p) {
+  const map = { mounted: ['mounted', '● 已挂载'], disabled: ['disabled', '○ 已停用'], unmounted: ['unmounted', '— 未挂载'] };
+  const [cls, label] = map[p.status] || ['unmounted', p.status];
+  const srcCls = p.source === 'self' ? 'self' : (p.source === 'official' ? 'official' : '');
+  const warn = p.source === 'self' && !p.built ? '<span class="badge warn">⚠ 未构建</span>' : '';
+  return '<span class="badge ' + cls + '">' + label + '</span>'
+    + (srcCls ? '<span class="badge ' + srcCls + '">' + p.source + '</span>' : '') + warn;
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function render() {
+  if (!STATE) return;
+  const q = document.getElementById('search').value.toLowerCase();
+  const sf = document.getElementById('srcFilter').value;
+  const grid = document.getElementById('grid');
+  const list = STATE.plugins.filter(p => {
+    if (sf === 'self' && p.source !== 'self') return false;
+    if (sf === 'official' && p.source !== 'official') return false;
+    if (sf === 'unmounted' && p.status !== 'unmounted') return false;
+    if (q) {
+      const hay = (p.name + ' ' + (p.purpose || '') + ' ' + (p.tools || []).join(' ') + ' ' + p.status).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  if (list.length === 0) { grid.innerHTML = '<div class="empty">无匹配插件</div>'; return; }
+  grid.innerHTML = list.map(p => {
+    const tools = (p.tools || []).slice(0, 12).map(t => '<span class="tool-tag">' + esc(t) + '</span>').join('') + ((p.tools || []).length > 12 ? ' <span class="tool-tag">+' + (p.tools.length - 12) + '</span>' : '');
+    const cfgStr = p.config && Object.keys(p.config).length ? JSON.stringify(p.config, null, 1) : '';
+    const acts = [];
+    if (p.status === 'mounted') acts.push('<button class="btn small danger" onclick="doOp(\'stop\',\'' + esc(p.name) + '\')">停用</button>');
+    else if (p.status === 'disabled') acts.push('<button class="btn small" onclick="doOp(\'start\',\'' + esc(p.name) + '\')">启用</button>');
+    if (p.source === 'self' && !p.built) acts.push('<button class="btn small" onclick="toast(\'请先在插件目录构建 (tsc)\', true)">⚠ 需构建</button>');
+    return '<div class="card"><div class="top">' + statusBadge(p)
+      + '<span class="nm">' + esc(p.name) + '</span>'
+      + (p.version ? '<span class="ver">v' + esc(p.version) + '</span>' : '')
+      + '</div>'
+      + (p.purpose ? '<div class="purpose">' + esc(p.purpose) + '</div>' : '')
+      + (p.tools && p.tools.length ? '<div class="tools">' + tools + '</div>' : '')
+      + '<div class="meta">'
+      + (p.hasClient ? '<span>client ✓</span>' : '')
+      + (p.path ? '<span title="' + esc(p.path) + '">' + esc(p.path.replace(/.*self-plugins[\\/]/, 'self-plugins/')) + '</span>' : '')
+      + '</div>'
+      + (cfgStr ? '<div class="cfg">' + esc(cfgStr) + '</div>' : '')
+      + (acts.length ? '<div class="actions">' + acts.join('') + '</div>' : '')
+      + '</div>';
+  }).join('');
+}
+
+async function doOp(op, name) {
+  try {
+    const d = await api('/api/panel/op', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ op, name, profile: 'web' }),
+    });
+    toast((d.note || op + ' ' + name) + ' — web 将重启生效，稍后自动恢复');
+    setTimeout(refresh, 4000);
+  } catch (e) {
+    toast(String(e.message || e), true);
+  }
+}
+
+let toastTimer = null;
+function toast(msg, isErr) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'show' + (isErr ? ' err' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = ''; }, 5000);
+}
+
+function autoToggle() {
+  autoOn = !autoOn;
+  document.getElementById('autoBtn').textContent = '自动刷新: ' + (autoOn ? '开' : '关');
+  if (autoOn) refresh();
+}
+
+refresh();
+setInterval(() => { if (autoOn) refresh(); }, 5000);
+</script>
+</body>
+</html>

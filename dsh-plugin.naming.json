@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schemaVersion": 1,
+  "policy": "dsh-plugin-naming/v1",
+  "plugin": {
+    "namespace": "alice",
+    "name": "panel",
+    "coordinate": "alice/panel",
+    "packageName": "dsh-panel"
+  },
+  "names": {
+    "pluginNames": ["agent-panel"],
+    "loaderIds": ["agent-panel"],
+    "services": [],
+    "tools": [],
+    "commands": [],
+    "skills": [],
+    "skillProviders": [],
+    "events": [],
+    "settingsNamespaces": [],
+    "routes": [
+      { "kind": "exact", "path": "/panel" },
+      { "kind": "exact", "path": "/api/panel/state" },
+      { "kind": "exact", "path": "/api/panel/op" }
+    ]
+  }
+}
