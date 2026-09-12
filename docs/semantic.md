@@ -279,9 +279,19 @@ type ActionSpec = {
 
 ---
 
+## 11.6 · 与实现的关系
+
+- **主实现**（本文档描述的唯一真源）：`src/index.ts`（插件装配 + webServer 注册）、`src/host.ts`（`PanelHost` Service：注册表/路由/超时/审计）、`src/registry.ts`（注册与 ViewSpec 校验）、`src/types.ts`（契约类型）、`src/audit.ts`（`audit.jsonl` + paramsDigest）、`src/assets/shell.html`（自包含外壳，零官方 client 依赖）。
+- **消费方实现**（非副本，各自独立）：`self-plugins/dsh-growth-profile/src/panel.ts`（首个消费方；不 import 宿主类型，用本地结构类型 + `ctx.inject(['panel'])` 接入）。
+- **同语义副本**：无——本能力单实现单仓库；跨插件协作走**契约**（§4.1/§4.2/§4.3）而非复制源码。
+- **未实现 / 未验证（显式标注）**：M3 的官方 `index-inject` 导航入口（未做，见 §6）；SSE 实时推送（v0.1 走轮询，见 U）；`ctx.panel` 的对外发布与命名规范（未做）。
+- **系统注册**：本文档登记于语义文档系统 `docs/semantics/registry.json`（id=`panel-host`），drift 检查（D1–D6）覆盖本文件。
+
+---
+
 ## 12 · 变更史
 
 | 版本 | 日期 | 变化 |
 |---|---|---|
 | v0.1 | 2026-09-12 | 初稿：定位/术语/概念模型/契约（注册·视图规格·动作 ABI·HTTP 面·失效语义）/信任边界/三条 GUI 通道取舍/迁移 M1-M3/10 条可证伪验收/6 个未决问题 |
-| v0.2 | 2026-09-12 | **实践回修（第三拍）**：§4.1 新增接入方式 `[MUST]`（inject 等待 > get 探测）；新增 §11.5 实践修订记录（4 条：被确认/被修正/被补充×2）；登记进语义文档系统 `docs/semantics/registry.json`（id=panel-host） |
+| v0.2 | 2026-09-12 | **实践回修（第三拍）**：§4.1 新增接入方式 `[MUST]`（inject 等待 > get 探测）；新增 §11.5 实践修订记录（4 条：被确认/被修正/被补充×2）；新增 §11.6 与实现的关系（补系统必备节，修 D4）；登记进语义文档系统 `docs/semantics/registry.json`（id=panel-host） |
