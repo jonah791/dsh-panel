@@ -1,0 +1,1390 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>爱丽丝 · 面板</title>
+<!--
+  ============================================================================
+  面板宿主外壳（Panel Host Shell）· dsh-panel 插件的展示层 · 单文件自包含
+  ============================================================================
+
+  为什么长这个样子（设计理由，不是复述代码）：
+
+  1. 展示层与数据层分离。宿主（Node 侧插件）在 /panel/ 托管本文件，页面只用
+     同源 fetch 调宿主的 JSON API，把宿主给的「视图规格（ViewSpec）」渲染成
+     界面。渲染逻辑全在浏览器，宿主换内容不必重新构建前端。
+
+  2. 契约来源：docs/semantic.md
+       §4.2 视图规格（ViewSpec 白名单块）
+       §4.4 HTTP 面（/api/panel/registry | view | action | selfcheck）
+       §4.5 失效与降级语义（单面板故障隔离、实测健康、degraded 而非转圈）
+     本文件只实现契约，不发明契约。文档里 actions 块的 items 曾写作 actionId[]，
+     实现层同时兼容「字符串 actionId」与「{actionId,label,level} 对象」两种形态，
+     避免契约小版本漂移把界面打崩。
+
+  3. 零依赖（无 CDN / 外部字体 / 框架）：面板要能在离线、受限网络、无构建链的
+     宿主里直接打开。
+
+  4. 禁止把 HTML 写进 TS 模板字符串：那样 HTML 会失去语法高亮、无法用浏览器
+     直接调试，且每次改文案都要重新构建插件。HTML 必须留在 .html 文件里。
+
+  安全纪律（硬性）：
+     · 所有来自 API 的字符串一律经 textContent 落地（或经 escape 转义后再拼）。
+     · 本文件唯一允许 innerHTML 的位置是「我自己构造的固定骨架」并且插入值已
+       转义——见 renderBlockUnknown（骨架固定，仅一个 kind 值经 escape 进入）。
+       其余任何地方不得用 innerHTML 插值。
+
+  降级纪律（§4.5）：
+     · 单个面板 view() 失败 → 只有该面板显示降级态 + 重试，导航与外壳照常可用。
+     · 失败语义看 payload.ok，不看 HTTP 状态码（宿主降级时 HTTP 仍可能是 200）。
+  ============================================================================
+-->
+<style>
+:root{
+  --bg:#14161a;
+  --fg:#e6e6e6;
+  --card:#1d2026;
+  --border:#2b2f36;
+  --accent:#6ea8fe;
+  --ok:#4ade80;
+  --warn:#fbbf24;
+  --bad:#f87171;
+  --muted:#8b949e;
+  --dur:120ms;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--fg);
+  font-family:ui-sans-serif,system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
+  font-size:14px;
+  line-height:1.5;
+  display:flex;
+  flex-direction:column;
+}
+button,input{font:inherit}
+.mono{font-family:ui-monospace,Consolas,monospace}
+
+/* 顶栏 --------------------------------------------------------------- */
+.topbar{
+  flex:0 0 auto;
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding:10px 16px;
+  background:#171a1f;
+  border-bottom:1px solid var(--border);
+}
+.brand{display:flex; align-items:baseline; gap:8px; min-width:0}
+.brand-title{font-size:15px; font-weight:600; letter-spacing:.02em; white-space:nowrap}
+.brand-ver{font-size:12px; color:var(--muted); font-family:ui-monospace,Consolas,monospace; white-space:nowrap}
+.topbar-actions{margin-left:auto; display:flex; align-items:center; gap:12px}
+.switch{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); cursor:pointer; user-select:none; white-space:nowrap}
+.switch input{accent-color:var(--accent); cursor:pointer}
+
+/* 按钮 --------------------------------------------------------------- */
+.btn{
+  background:#23272e;
+  color:var(--fg);
+  border:1px solid var(--border);
+  border-radius:6px;
+  padding:4px 10px;
+  font-size:12px;
+  cursor:pointer;
+  transition:background var(--dur), border-color var(--dur), color var(--dur);
+}
+.btn:hover:not(:disabled){background:#2c313a; border-color:#3a404a}
+.btn:disabled{opacity:.45; cursor:not-allowed}
+.btn.small{padding:2px 8px}
+.btn.read{color:var(--accent); border-color:#2f4a72}
+.btn.write{color:var(--warn); border-color:#5a4a24}
+.btn.destructive{color:var(--bad); border-color:#5a3134}
+
+/* 顶部提示条 --------------------------------------------------------- */
+.banners{flex:0 0 auto}
+.banner{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:7px 16px;
+  font-size:13px;
+  border-bottom:1px solid var(--border);
+}
+.banner-msg{flex:1 1 auto; overflow-wrap:anywhere}
+.banner-close{margin-left:auto; flex:0 0 auto}
+.banner.tone-ok{background:rgba(74,222,128,.12); color:#c7f2d6}
+.banner.tone-warn{background:rgba(251,191,36,.12); color:#f6e0ac}
+.banner.tone-bad{background:rgba(248,113,113,.14); color:#f6c9c9}
+.banner.tone-muted{background:var(--card); color:var(--muted)}
+
+/* 主布局 ------------------------------------------------------------- */
+.layout{flex:1 1 auto; display:flex; min-height:0}
+.nav{
+  width:200px;
+  flex:0 0 200px;
+  background:#171a1f;
+  border-right:1px solid var(--border);
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+}
+.nav-list{flex:1 1 auto; overflow-y:auto; overflow-x:hidden; padding:8px}
+.nav-foot{flex:0 0 auto; border-top:1px solid var(--border); padding:8px}
+.nav-item{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  padding:6px 8px;
+  border-radius:6px;
+  color:var(--fg);
+  text-decoration:none;
+  font-size:13px;
+  transition:background var(--dur), color var(--dur);
+}
+.nav-item:hover{background:#22262d}
+.nav-item.active{background:#243044; color:#cfe1ff}
+.nav-title{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.nav-empty{padding:6px 8px 8px; color:var(--muted); font-size:12px; display:flex; flex-direction:column; gap:6px; align-items:flex-start}
+.dot{flex:0 0 auto; width:8px; height:8px; border-radius:50%; background:var(--muted)}
+.dot.tone-ok{background:var(--ok)}
+.dot.tone-warn{background:var(--warn)}
+.dot.tone-bad{background:var(--bad)}
+.dot.tone-muted{background:var(--muted)}
+
+/* 内容区 ------------------------------------------------------------- */
+.content{flex:1 1 auto; min-width:0; overflow-y:auto; padding:14px 16px 24px}
+.panel-head{display:flex; align-items:baseline; gap:10px; margin-bottom:12px}
+.panel-title{margin:0; font-size:16px; font-weight:600; overflow-wrap:anywhere}
+.dur{flex:0 0 auto; font-size:12px; color:var(--muted); font-family:ui-monospace,Consolas,monospace}
+.dur.slow{color:var(--warn)}
+
+/* 块 ---------------------------------------------------------------- */
+.block{background:var(--card); border:1px solid var(--border); border-radius:8px; margin-bottom:12px}
+.block:last-child{margin-bottom:0}
+.block-head{padding:8px 12px; border-bottom:1px solid var(--border); font-size:12px; color:var(--muted)}
+.block-body{padding:12px}
+.empty{color:var(--muted); font-size:13px; padding:4px 0}
+
+/* metrics ----------------------------------------------------------- */
+.metrics{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px}
+.metric{background:#1a1d22; border:1px solid var(--border); border-radius:6px; padding:8px 10px}
+.metric-value{font-size:18px; font-weight:600; font-family:ui-monospace,Consolas,monospace; overflow-wrap:anywhere}
+.metric-label{font-size:12px; color:var(--muted); margin-top:2px}
+.metric-hint{font-size:11px; color:var(--muted); margin-top:2px}
+.metric.tone-ok .metric-value{color:var(--ok)}
+.metric.tone-warn .metric-value{color:var(--warn)}
+.metric.tone-bad .metric-value{color:var(--bad)}
+.metric.tone-muted .metric-value{color:var(--muted)}
+
+/* table ------------------------------------------------------------- */
+.table-wrap{overflow:auto; max-height:62vh}
+table{border-collapse:collapse; width:100%; font-size:13px}
+th,td{padding:6px 10px; border-bottom:1px solid #23272e; text-align:left; vertical-align:top}
+thead th{
+  position:sticky;
+  top:0;
+  z-index:1;
+  background:#20242b;
+  color:var(--muted);
+  font-weight:600;
+  white-space:nowrap;
+}
+th.right,td.right{text-align:right}
+tbody tr{transition:background var(--dur)}
+tbody tr:hover{background:#22262d}
+td .cell{display:block; max-width:340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+td.actions-cell{text-align:right; white-space:nowrap}
+td.actions-cell .btn{margin-left:6px}
+
+/* list -------------------------------------------------------------- */
+.list{display:flex; flex-direction:column; gap:8px}
+.list-item{background:#1a1d22; border:1px solid var(--border); border-left:3px solid var(--border); border-radius:6px; padding:8px 10px}
+.list-item.tone-ok{border-left-color:var(--ok)}
+.list-item.tone-warn{border-left-color:var(--warn)}
+.list-item.tone-bad{border-left-color:var(--bad)}
+.list-item.tone-muted{border-left-color:var(--muted)}
+.list-title{font-size:13px; font-weight:600; overflow-wrap:anywhere}
+.list-sub{font-size:12px; color:var(--muted); margin-top:2px; overflow-wrap:anywhere}
+.tags{display:flex; flex-wrap:wrap; gap:6px; margin-top:6px}
+.tag{font-size:11px; color:var(--muted); background:#23272e; border:1px solid var(--border); border-radius:999px; padding:1px 8px}
+
+/* kv ---------------------------------------------------------------- */
+.kv{display:grid; grid-template-columns:minmax(110px,max-content) 1fr; gap:6px 14px}
+.kv-key{color:var(--muted); font-size:13px; overflow-wrap:anywhere}
+.kv-val{font-size:13px; font-family:ui-monospace,Consolas,monospace; overflow-wrap:anywhere}
+
+/* text -------------------------------------------------------------- */
+.text-line{font-family:ui-monospace,Consolas,monospace; font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; padding:1px 0}
+
+/* timeline ---------------------------------------------------------- */
+.tl{position:relative; padding-left:12px}
+.tl::before{content:""; position:absolute; left:3px; top:6px; bottom:6px; width:1px; background:var(--border)}
+.tl-item{position:relative; padding:4px 0 8px 6px}
+.tl-item:last-child{padding-bottom:0}
+.tl-dot{position:absolute; left:-12px; top:9px; width:7px; height:7px; border-radius:50%; background:var(--muted)}
+.tl-dot.tone-ok{background:var(--ok)}
+.tl-dot.tone-warn{background:var(--warn)}
+.tl-dot.tone-bad{background:var(--bad)}
+.tl-dot.tone-muted{background:var(--muted)}
+.tl-at{font-size:11px; color:var(--muted); font-family:ui-monospace,Consolas,monospace}
+.tl-title{font-size:13px; overflow-wrap:anywhere}
+.tl-detail{font-size:12px; color:var(--muted); overflow-wrap:anywhere}
+
+/* actions / sections / 未知块 ----------------------------------------- */
+.btn-group{display:flex; flex-wrap:wrap; gap:8px}
+.sections > .block-body > .block{margin-bottom:10px}
+.sections > .block-body > .block:last-child{margin-bottom:0}
+.unknown{border-style:dashed}
+.unknown-title{color:var(--warn); font-size:13px}
+.unknown-hint{color:var(--muted); font-size:12px; margin-top:4px}
+
+/* 降级态 ------------------------------------------------------------- */
+.degraded{background:var(--card); border:1px solid #5a3134; border-radius:8px; padding:14px}
+.degraded-title{color:var(--warn); font-weight:600; margin-bottom:6px}
+.degraded-msg{
+  margin-bottom:10px;
+  font-family:ui-monospace,Consolas,monospace;
+  font-size:13px;
+  overflow-wrap:anywhere;
+}
+
+/* 窄屏：导航折叠为顶部横向滚动条 ------------------------------------- */
+@media (max-width:720px){
+  .layout{flex-direction:column}
+  .nav{
+    width:auto;
+    flex:0 0 auto;
+    flex-direction:row;
+    align-items:center;
+    border-right:none;
+    border-bottom:1px solid var(--border);
+  }
+  .nav-list{
+    display:flex;
+    gap:6px;
+    flex:1 1 auto;
+    overflow-x:auto;
+    overflow-y:hidden;
+    padding:6px 8px;
+  }
+  .nav-foot{border-top:none; padding:6px 8px; flex:0 0 auto}
+  .nav-item{white-space:nowrap; flex:0 0 auto}
+  .nav-empty{flex-direction:row; align-items:center; padding:4px 8px}
+  .content{padding:12px}
+  td .cell{max-width:200px}
+}
+</style>
+</head>
+<body>
+
+<!-- 骨架全部静态写在这里：JS 只往骨架里填内容，不重建外壳 -->
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-title">爱丽丝 · 面板</span>
+    <span class="brand-ver" id="hostVersion">宿主版本 —</span>
+  </div>
+  <div class="topbar-actions">
+    <label class="switch" title="页面可见时每 5 秒自动刷新当前面板；页面切到后台时停止">
+      <input type="checkbox" id="autoRefresh" checked>
+      <span>自动刷新</span>
+    </label>
+    <button class="btn" id="refreshBtn" type="button" title="重新拉取注册表并刷新当前面板">刷新</button>
+  </div>
+</header>
+
+<div class="banners" id="banners"></div>
+
+<main class="layout">
+  <nav class="nav" id="nav">
+    <div class="nav-list" id="navList"></div>
+    <div class="nav-foot" id="navFoot"></div>
+  </nav>
+  <section class="content" id="content">
+    <div class="panel-head">
+      <h1 class="panel-title" id="panelTitle">—</h1>
+      <span class="dur" id="panelDuration">—</span>
+    </div>
+    <div class="panel-body" id="panelBody"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ==================================================================
+     常量
+     ================================================================== */
+
+  // 自检视图不是注册表里的面板，它是外壳自带的一项（要求 8）。
+  var SELFCHECK_ID = '__selfcheck';
+  var REFRESH_MS = 5000;
+
+  var VALID_TONES = { ok: 1, warn: 1, bad: 1, muted: 1 };
+  var HEALTH_TEXT = { ok: '健康', degraded: '降级', down: '不可用', unknown: '未知' };
+  var LEVEL_TEXT = { read: '只读', write: '写入', destructive: '破坏性' };
+
+  /* ==================================================================
+     状态
+     ================================================================== */
+
+  var state = {
+    panels: [],        // 注册表投影（已按 order 升序）
+    host: null,
+    currentId: null,
+    autoRefresh: true,
+    inflight: false,    // 同一时刻只允许一个视图请求在飞，防轮询堆叠
+    pendingId: null     // 在飞期间被挡下的目标面板：请求结束后补发，避免切面板被吞
+  };
+  var tickTimer = null;
+  var dom = {};
+
+  /* ==================================================================
+     基础工具
+     ================================================================== */
+
+  // 转义只服务于「必须拼 HTML 字符串」的少数固定骨架（未知块提示）。
+  // 其余动态文本一律走 textContent —— 转义是兜底，textContent 才是默认路径。
+  function escape(value) {
+    return String(value === undefined || value === null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function el(tag, className, textValue) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (textValue !== undefined && textValue !== null) node.textContent = String(textValue);
+    return node;
+  }
+
+  function hasText(v) {
+    return v !== undefined && v !== null && String(v) !== '';
+  }
+
+  // 缺失/空串统一兜底为破折号：界面上「没有值」不能变成空白（分不清是空还是坏）。
+  function text(value, fallback) {
+    var fb = fallback === undefined ? '—' : fallback;
+    if (value === undefined || value === null) return fb;
+    var s = String(value);
+    return s === '' ? fb : s;
+  }
+
+  function toneClass(tone) {
+    return VALID_TONES[tone] === 1 ? ' tone-' + tone : '';
+  }
+
+  function healthLabel(health) {
+    return HEALTH_TEXT[health] || '未知';
+  }
+
+  function levelLabel(level) {
+    return LEVEL_TEXT[level] || '未声明级别';
+  }
+
+  // 只认 ABI 里的三个级别（read/write/destructive），未知级别不加样式类
+  function levelClass(level) {
+    return LEVEL_TEXT[level] ? ' ' + level : '';
+  }
+
+  function cellText(value) {
+    if (value === undefined || value === null || value === '') return '—';
+    if (typeof value === 'object') {
+      var s;
+      try { s = JSON.stringify(value); } catch (e) { s = '[无法序列化的值]'; }
+      if (s === undefined) return '—';
+      return s.length > 200 ? s.slice(0, 200) + '…' : s;
+    }
+    return String(value);
+  }
+
+  function fmtTime(value) {
+    if (!hasText(value)) return '—';
+    var d = new Date(String(value));
+    if (isNaN(d.getTime())) return String(value);   // 不是时间就原样显示，不假装
+    return d.toLocaleString('zh-CN', { hour12: false });
+  }
+
+  function fmtDuration(ms) {
+    var n = Number(ms);
+    if (!isFinite(n) || n < 0) return '—';
+    var s = Math.floor(n / 1000);
+    var days = Math.floor(s / 86400);
+    var hours = Math.floor((s % 86400) / 3600);
+    var mins = Math.floor((s % 3600) / 60);
+    var secs = s % 60;
+    if (days > 0) return days + ' 天 ' + hours + ' 小时';
+    if (hours > 0) return hours + ' 小时 ' + mins + ' 分';
+    if (mins > 0) return mins + ' 分 ' + secs + ' 秒';
+    return secs + ' 秒';
+  }
+
+  function apiError(message, kind) {
+    var err = new Error(message);
+    err.kind = kind || 'unknown';
+    return err;
+  }
+
+  /* ==================================================================
+     api() —— 统一 fetch + JSON + 错误规范化
+     语义：网络失败/非 JSON 一律转成可展示的错误对象（绝不抛未捕获异常）；
+     解析成功则原样返回 payload，成败由调用方检查 payload.ok
+     （宿主降级时 HTTP 仍可能是 200，这是契约的硬性语义）。
+     ================================================================== */
+
+  async function api(path, options) {
+    var opt = options || {};
+    var init = {
+      method: opt.method || 'GET',
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' }
+    };
+    if (opt.body !== undefined) {
+      init.headers['Content-Type'] = 'application/json';
+      init.body = JSON.stringify(opt.body);
+    }
+
+    var res;
+    try {
+      res = await fetch(path, init);
+    } catch (e) {
+      throw apiError('网络请求失败：' + (e && e.message ? e.message : String(e)), 'network');
+    }
+
+    var raw = '';
+    try {
+      raw = await res.text();
+    } catch (e) {
+      throw apiError('读取响应失败：' + (e && e.message ? e.message : String(e)), 'network');
+    }
+
+    var trimmed = raw.trim();
+    if (trimmed === '') {
+      if (res.ok) return {};
+      throw apiError('HTTP ' + res.status + '：响应为空', 'http');
+    }
+
+    var data;
+    try {
+      data = JSON.parse(trimmed);
+    } catch (e) {
+      throw apiError('响应不是合法 JSON（HTTP ' + res.status + '）：' + trimmed.slice(0, 120), 'parse');
+    }
+    return data;
+  }
+
+  /* ==================================================================
+     顶部提示条（可多条并存：注册表错误 / 降级 / 动作结果 / 脚本错误）
+     ================================================================== */
+
+  function setBanner(key, tone, message) {
+    if (!dom.banners) return;
+    var node = dom.banners.querySelector('[data-banner="' + key + '"]');
+    if (!node) {
+      node = el('div', 'banner');
+      node.setAttribute('data-banner', key);
+      node.appendChild(el('span', 'banner-icon', '●'));
+      node.appendChild(el('span', 'banner-msg'));
+      var close = el('button', 'btn small banner-close', '关闭');
+      close.type = 'button';
+      close.addEventListener('click', function () { node.remove(); });
+      node.appendChild(close);
+      dom.banners.appendChild(node);
+    }
+    node.className = 'banner' + toneClass(tone);
+    var msgEl = node.querySelector('.banner-msg');
+    if (msgEl) msgEl.textContent = String(message === undefined || message === null ? '' : message);
+  }
+
+  function clearBanner(key) {
+    if (!dom.banners) return;
+    var node = dom.banners.querySelector('[data-banner="' + key + '"]');
+    if (node) node.remove();
+  }
+
+  /* ==================================================================
+     ViewSpec 渲染
+     ================================================================== */
+
+  function emptyState(label) {
+    return el('div', 'empty', label || '暂无数据');
+  }
+
+  // 块外壳：标题可缺省（契约里 title 是可选的），空标题不占版面。
+  function blockShell(title) {
+    var wrap = el('section', 'block');
+    if (hasText(title)) wrap.appendChild(el('div', 'block-head', String(title)));
+    var body = el('div', 'block-body');
+    wrap.appendChild(body);
+    return { wrap: wrap, body: body };
+  }
+
+  // 按 kind 分派；未知类型渲染提示而不是抛错（白名单先小后扩，旧外壳不能被新块打崩）。
+  function renderBlocks(blocks, ctx) {
+    var frag = document.createDocumentFragment();
+    if (!Array.isArray(blocks) || blocks.length === 0) {
+      frag.appendChild(emptyState('该面板暂无内容'));
+      return frag;
+    }
+    for (var i = 0; i < blocks.length; i++) {
+      var block = blocks[i];
+      if (!block || typeof block !== 'object') {
+        frag.appendChild(renderBlockUnknown('', block));
+        continue;
+      }
+      var kind = hasText(block.kind) ? String(block.kind) : '';
+      var node;
+      switch (kind) {
+        case 'sections': node = renderBlockSections(block, ctx); break;
+        case 'metrics': node = renderBlockMetrics(block); break;
+        case 'table': node = renderBlockTable(block, ctx); break;
+        case 'list': node = renderBlockList(block); break;
+        case 'kv': node = renderBlockKv(block); break;
+        case 'text': node = renderBlockText(block); break;
+        case 'timeline': node = renderBlockTimeline(block); break;
+        case 'actions': node = renderBlockActions(block, ctx); break;
+        default: node = renderBlockUnknown(kind, block); break;
+      }
+      if (node) frag.appendChild(node);
+    }
+    return frag;
+  }
+
+  function renderBlockSections(block, ctx) {
+    var shell = blockShell(block.title);
+    shell.wrap.classList.add('sections');
+    shell.body.appendChild(renderBlocks(block.blocks, ctx));
+    return shell.wrap;
+  }
+
+  function renderBlockMetrics(block) {
+    var shell = blockShell(block.title);
+    var items = Array.isArray(block.items) ? block.items : [];
+    if (items.length === 0) {
+      shell.body.appendChild(emptyState());
+      return shell.wrap;
+    }
+    var grid = el('div', 'metrics');
+    for (var i = 0; i < items.length; i++) {
+      var raw = items[i];
+      var item = raw && typeof raw === 'object' ? raw : {};
+      var cell = el('div', 'metric' + toneClass(item.tone));
+      cell.appendChild(el('div', 'metric-value', text(item.value)));
+      cell.appendChild(el('div', 'metric-label', text(item.label)));
+      if (hasText(item.hint)) cell.appendChild(el('div', 'metric-hint', String(item.hint)));
+      grid.appendChild(cell);
+    }
+    shell.body.appendChild(grid);
+    return shell.wrap;
+  }
+
+  function renderBlockTable(block, ctx) {
+    var shell = blockShell(block.title);
+    var rows = Array.isArray(block.rows) ? block.rows : [];
+    var columns = Array.isArray(block.columns) ? block.columns : [];
+    columns = columns.filter(function (c) { return c && typeof c === 'object'; });
+
+    // 列未声明时用首行的键兜底：宁可少信息，也不要一张空表。
+    if (columns.length === 0 && rows.length > 0 && rows[0] && typeof rows[0] === 'object') {
+      columns = Object.keys(rows[0]).map(function (k) { return { key: k, label: k }; });
+    }
+    if (rows.length === 0) {
+      shell.body.appendChild(emptyState());
+      return shell.wrap;
+    }
+
+    var rowActions = Array.isArray(block.rowActions)
+      ? block.rowActions.filter(hasText).map(String)
+      : [];
+
+    var wrap = el('div', 'table-wrap');
+    var table = el('table');
+
+    var thead = el('thead');
+    var headRow = el('tr');
+    for (var i = 0; i < columns.length; i++) {
+      var col = columns[i];
+      var th = el('th', col.align === 'right' ? 'right' : '', text(col.label, text(col.key)));
+      headRow.appendChild(th);
+    }
+    if (rowActions.length > 0) headRow.appendChild(el('th', 'right', '操作'));
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    var tbody = el('tbody');
+    for (var r = 0; r < rows.length; r++) {
+      var rawRow = rows[r];
+      var row = rawRow && typeof rawRow === 'object' ? rawRow : {};
+      var tr = el('tr');
+      for (var c = 0; c < columns.length; c++) {
+        var key = columns[c].key;
+        var value = key === undefined || key === null ? undefined : row[key];
+        var td = el('td', columns[c].align === 'right' ? 'right' : '');
+        var cell = el('span', 'cell', cellText(value));
+        // 长文本被省略号截断后，hover 仍能看到全文（用属性而不是 innerHTML）
+        if (typeof value === 'string' && value.length > 24) cell.title = value;
+        td.appendChild(cell);
+        tr.appendChild(td);
+      }
+      if (rowActions.length > 0) {
+        var actionCell = el('td', 'actions-cell');
+        for (var a = 0; a < rowActions.length; a++) {
+          actionCell.appendChild(actionButton(rowActions[a], ctx));
+        }
+        tr.appendChild(actionCell);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    shell.body.appendChild(wrap);
+    return shell.wrap;
+  }
+
+  function renderBlockList(block) {
+    var shell = blockShell(block.title);
+    var items = Array.isArray(block.items) ? block.items : [];
+    if (items.length === 0) {
+      shell.body.appendChild(emptyState());
+      return shell.wrap;
+    }
+    var list = el('div', 'list');
+    for (var i = 0; i < items.length; i++) {
+      var raw = items[i];
+      var item = raw && typeof raw === 'object' ? raw : {};
+      var card = el('div', 'list-item' + toneClass(item.tone));
+      card.appendChild(el('div', 'list-title', text(item.title)));
+      if (hasText(item.subtitle)) card.appendChild(el('div', 'list-sub', String(item.subtitle)));
+      if (Array.isArray(item.tags)) {
+        var tags = item.tags.filter(hasText);
+        if (tags.length > 0) {
+          var tagBox = el('div', 'tags');
+          for (var t = 0; t < tags.length; t++) tagBox.appendChild(el('span', 'tag', String(tags[t])));
+          card.appendChild(tagBox);
+        }
+      }
+      list.appendChild(card);
+    }
+    shell.body.appendChild(list);
+    return shell.wrap;
+  }
+
+  function renderBlockKv(block) {
+    var shell = blockShell(block.title);
+    var pairs = Array.isArray(block.pairs) ? block.pairs : [];
+    if (pairs.length === 0) {
+      shell.body.appendChild(emptyState());
+      return shell.wrap;
+    }
+    var grid = el('div', 'kv');
+    for (var i = 0; i < pairs.length; i++) {
+      var raw = pairs[i];
+      var pair = raw && typeof raw === 'object' ? raw : {};
+      grid.appendChild(el('div', 'kv-key', text(pair.key)));
+      grid.appendChild(el('div', 'kv-val', text(pair.value)));
+    }
+    shell.body.appendChild(grid);
+    return shell.wrap;
+  }
+
+  function renderBlockText(block) {
+    var shell = blockShell(block.title);
+    var lines = Array.isArray(block.lines) ? block.lines : [];
+    if (lines.length === 0) {
+      shell.body.appendChild(emptyState());
+      return shell.wrap;
+    }
+    for (var i = 0; i < lines.length; i++) {
+      // 空行保留（说明性文本里的分段有意义），但不做任何 HTML 解析
+      shell.body.appendChild(el('div', 'text-line', lines[i] === undefined || lines[i] === null ? '' : String(lines[i])));
+    }
+    return shell.wrap;
+  }
+
+  function renderBlockTimeline(block) {
+    var shell = blockShell(block.title);
+    var events = Array.isArray(block.events) ? block.events : [];
+    if (events.length === 0) {
+      shell.body.appendChild(emptyState());
+      return shell.wrap;
+    }
+    var tl = el('div', 'tl');
+    for (var i = 0; i < events.length; i++) {
+      var raw = events[i];
+      var ev = raw && typeof raw === 'object' ? raw : {};
+      var item = el('div', 'tl-item');
+      item.appendChild(el('span', 'tl-dot' + toneClass(ev.tone)));
+      item.appendChild(el('div', 'tl-at', text(ev.at)));
+      item.appendChild(el('div', 'tl-title', text(ev.title)));
+      if (hasText(ev.detail)) item.appendChild(el('div', 'tl-detail', String(ev.detail)));
+      tl.appendChild(item);
+    }
+    shell.body.appendChild(tl);
+    return shell.wrap;
+  }
+
+  function renderBlockActions(block, ctx) {
+    var shell = blockShell(block.title);
+    var items = Array.isArray(block.items) ? block.items : [];
+    if (items.length === 0) {
+      shell.body.appendChild(emptyState('暂无可执行动作'));
+      return shell.wrap;
+    }
+    var group = el('div', 'btn-group');
+    for (var i = 0; i < items.length; i++) {
+      var raw = items[i];
+      // items 两种形态都要吃：契约文档写 actionId[]，早期规格写过对象数组
+      if (raw && typeof raw === 'object') {
+        var id = hasText(raw.actionId) ? String(raw.actionId) : (hasText(raw.id) ? String(raw.id) : '');
+        group.appendChild(actionButton(id, ctx, raw));
+      } else if (hasText(raw)) {
+        group.appendChild(actionButton(String(raw), ctx, null));
+      }
+    }
+    if (group.childNodes.length === 0) shell.body.appendChild(emptyState('暂无可执行动作'));
+    else shell.body.appendChild(group);
+    return shell.wrap;
+  }
+
+  // 未知块：白名单外的类型必须给出可读提示，且绝不能拖垮整页。
+  // 这里是全文件唯一使用 innerHTML 的位置——骨架是固定字面量，唯一的动态值
+  // （kind）经 escape 后才拼入。
+  function renderBlockUnknown(kind, raw) {
+    var wrap = el('section', 'block unknown');
+    var body = el('div', 'block-body');
+    var shown = hasText(kind) ? String(kind) : '(缺少 kind 字段)';
+    body.innerHTML =
+      '<div class="unknown-title">未知块类型：' + escape(shown) + '</div>' +
+      '<div class="unknown-hint">该块不在 ViewSpec 白名单内，已跳过渲染。</div>';
+    wrap.appendChild(body);
+    return wrap;
+  }
+
+  /* ==================================================================
+     动作：元信息索引 + 按钮 + 派发
+     ================================================================== */
+
+  // 递归收集 actions 块里的声明（sections 是唯一嵌套块，必须跟着进）
+  function collectActionItems(blocks, out) {
+    var acc = out || [];
+    if (!Array.isArray(blocks)) return acc;
+    for (var i = 0; i < blocks.length; i++) {
+      var block = blocks[i];
+      if (!block || typeof block !== 'object') continue;
+      if (block.kind === 'actions' && Array.isArray(block.items)) {
+        for (var j = 0; j < block.items.length; j++) acc.push(block.items[j]);
+      }
+      if (block.kind === 'sections') collectActionItems(block.blocks, acc);
+    }
+    return acc;
+  }
+
+  // 动作元信息优先级：view 返回的 actions 字段 > actions 块（后写的覆盖先写的）。
+  // 找不到元信息的按钮：禁用 + title 说明原因（诚实 > 假装可点）。
+  function buildActionIndex(blocks, viewActions) {
+    var index = new Map();
+
+    function add(raw) {
+      if (raw && typeof raw === 'object') {
+        var id = hasText(raw.actionId) ? String(raw.actionId) : (hasText(raw.id) ? String(raw.id) : '');
+        if (id === '') return;
+        index.set(id, {
+          label: hasText(raw.label) ? String(raw.label) : id,
+          level: hasText(raw.level) ? String(raw.level) : 'read'
+        });
+        return;
+      }
+      // 字符串形态只声明了 id，没有 label/level：登记为未知元信息占位
+      if (hasText(raw)) {
+        var key = String(raw);
+        if (!index.has(key)) index.set(key, null);
+      }
+    }
+
+    var declared = collectActionItems(blocks);
+    for (var i = 0; i < declared.length; i++) add(declared[i]);
+
+    if (Array.isArray(viewActions)) {
+      for (var a = 0; a < viewActions.length; a++) add(viewActions[a]);
+    } else if (viewActions && typeof viewActions === 'object') {
+      if (Array.isArray(viewActions.items)) {
+        for (var b = 0; b < viewActions.items.length; b++) add(viewActions.items[b]);
+      } else {
+        var keys = Object.keys(viewActions);
+        for (var k = 0; k < keys.length; k++) {
+          var val = viewActions[keys[k]];
+          add(val && typeof val === 'object'
+            ? Object.assign({ actionId: keys[k] }, val)
+            : { actionId: keys[k] });
+        }
+      }
+    }
+    return index;
+  }
+
+  function lookupAction(actionId, ctx) {
+    if (!ctx || !ctx.actionIndex || !hasText(actionId)) return null;
+    return ctx.actionIndex.get(String(actionId)) || null;
+  }
+
+  function actionButton(actionId, ctx, inlineMeta) {
+    var meta = inlineMeta && hasText(inlineMeta.level) ? inlineMeta : lookupAction(actionId, ctx);
+    var level = meta && hasText(meta.level) ? String(meta.level) : '';
+    var label = meta && hasText(meta.label) ? String(meta.label) : text(actionId, '(缺少 actionId)');
+    var btn = el('button', 'btn small' + levelClass(level), label);
+    btn.type = 'button';
+
+    if (!hasText(actionId)) {
+      btn.disabled = true;
+      btn.title = '该动作缺少 actionId，无法派发';
+      return btn;
+    }
+    if (!meta || !hasText(level)) {
+      btn.disabled = true;
+      btn.title = '动作元信息缺失：actions 块 / view.actions 中未声明 ' + actionId;
+      return btn;
+    }
+    btn.title = levelLabel(level) + '动作：' + actionId;
+    btn.addEventListener('click', function () {
+      dispatchAction(ctx.panelId, String(actionId), label, level, ctx.panelTitle);
+    });
+    return btn;
+  }
+
+  // 派发：destructive 先二次确认（确认后才带 confirm:true），read/write 直接 POST；
+  // 无论成败都立刻刷新当前面板（结果条显示返回值，视图显示副作用后的真相）。
+  async function dispatchAction(panelId, actionId, label, level, panelTitle) {
+    if (!hasText(panelId) || !hasText(actionId)) {
+      setBanner('result', 'bad', '动作派发失败：缺少 panelId 或 actionId');
+      return;
+    }
+
+    var confirmed = false;
+    if (level === 'destructive') {
+      var panelName = hasText(panelTitle) ? String(panelTitle) : String(panelId);
+      var okGo = window.confirm(
+        '确认执行「' + label + '」？\n' +
+        '面板：' + panelName + '\n' +
+        '级别：破坏性操作，执行后可能无法撤销。'
+      );
+      if (!okGo) {
+        setBanner('result', 'muted', '已取消：' + label);
+        return;
+      }
+      confirmed = true;
+    }
+
+    setBanner('result', 'muted', '正在执行：' + label + ' …');
+
+    try {
+      var data = await api('/api/panel/action', {
+        method: 'POST',
+        body: {
+          panelId: String(panelId),
+          actionId: String(actionId),
+          params: {},
+          confirm: confirmed
+        }
+      });
+      if (data && data.ok === true) {
+        setBanner('result', 'ok', '「' + label + '」' + text(data.message, '执行成功'));
+      } else {
+        setBanner('result', 'bad', '「' + label + '」失败：' + text(data && data.error, '宿主未返回错误详情'));
+      }
+    } catch (e) {
+      setBanner('result', 'bad', '「' + label + '」失败：' + (e && e.message ? e.message : String(e)));
+    }
+
+    await refreshCurrent();
+  }
+
+  /* ==================================================================
+     面板外壳（标题 + 耗时角标）
+     ================================================================== */
+
+  function renderPanelShell(title, durationMs) {
+    dom.panelTitle.textContent = text(title, '—');
+
+    var durEl = dom.panelDuration;
+    durEl.className = 'dur';
+    durEl.removeAttribute('title');
+    if (typeof durationMs === 'number' && isFinite(durationMs)) {
+      durEl.textContent = Math.round(durationMs) + 'ms';
+      if (durationMs > 1000) durEl.classList.add('slow');   // 变慢是信号，必须看得见
+    } else {
+      durEl.textContent = '—';
+    }
+  }
+
+  function clearPanelBody() {
+    dom.panelBody.textContent = '';
+  }
+
+  function renderPanelDegraded(panelId, message) {
+    renderPanelShell(panelTitleOf(panelId), null);
+    clearPanelBody();
+
+    var card = el('div', 'degraded');
+    card.appendChild(el('div', 'degraded-title', '⚠ 面板降级'));
+    card.appendChild(el('div', 'degraded-msg', text(message, '未知错误')));
+
+    var retry = el('button', 'btn', '重试');
+    retry.type = 'button';
+    retry.addEventListener('click', function () { refreshCurrent(); });
+    card.appendChild(retry);
+
+    dom.panelBody.appendChild(card);
+  }
+
+  /* ==================================================================
+     注册表 / 导航
+     ================================================================== */
+
+  function isKnownPanel(id) {
+    if (!hasText(id)) return false;
+    for (var i = 0; i < state.panels.length; i++) {
+      if (String(state.panels[i].id) === String(id)) return true;
+    }
+    return false;
+  }
+
+  function panelTitleOf(id) {
+    if (id === SELFCHECK_ID) return '宿主自检';
+    for (var i = 0; i < state.panels.length; i++) {
+      if (String(state.panels[i].id) === String(id)) {
+        return hasText(state.panels[i].title) ? String(state.panels[i].title) : String(id);
+      }
+    }
+    return hasText(id) ? String(id) : '面板';
+  }
+
+  function renderNav() {
+    dom.navList.textContent = '';
+    if (state.panels.length === 0) {
+      dom.navList.appendChild(el('div', 'nav-empty', '暂无已注册面板'));
+    } else {
+      for (var i = 0; i < state.panels.length; i++) {
+        var panel = state.panels[i];
+        var id = String(panel.id);
+        var title = hasText(panel.title) ? String(panel.title) : id;
+        var health = hasText(panel.health) ? String(panel.health) : 'unknown';
+
+        var link = el('a', 'nav-item');
+        link.href = '#/panel/' + encodeURIComponent(id);
+        link.setAttribute('data-panel-id', id);
+        link.title = title + '：健康 ' + healthLabel(health)
+          + (hasText(panel.description) ? ' · ' + String(panel.description) : '');
+        link.appendChild(el('span', 'nav-title', title));
+
+        // health 非 ok 才挂圆点：正常态不该有视觉噪音，异常态必须一眼可见
+        if (health !== 'ok') {
+          var dot = el('span', 'dot' + toneClass(health === 'unknown' ? 'muted' : health));
+          dot.title = '健康：' + healthLabel(health);
+          link.appendChild(dot);
+        }
+        dom.navList.appendChild(link);
+      }
+    }
+    renderNavFoot();
+  }
+
+  function renderNavFoot() {
+    dom.navFoot.textContent = '';
+    var link = el('a', 'nav-item');
+    link.href = '#/panel/' + encodeURIComponent(SELFCHECK_ID);
+    link.setAttribute('data-panel-id', SELFCHECK_ID);
+    link.title = '宿主自检：版本 / 运行时长 / 各面板实测健康';
+    link.appendChild(el('span', 'nav-title', '宿主自检'));
+    dom.navFoot.appendChild(link);
+    updateNavActive();
+  }
+
+  function renderNavError(message) {
+    dom.navList.textContent = '';
+    var box = el('div', 'nav-empty');
+    box.appendChild(el('div', null, '注册表加载失败'));
+    var detail = el('div', null, text(message, '未知错误'));
+    detail.title = text(message, '未知错误');
+    box.appendChild(detail);
+    var retry = el('button', 'btn small', '重试');
+    retry.type = 'button';
+    retry.addEventListener('click', function () { loadRegistry(); });
+    box.appendChild(retry);
+    dom.navList.appendChild(box);
+  }
+
+  function updateNavActive() {
+    var items = dom.navList.querySelectorAll('.nav-item');
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].getAttribute('data-panel-id') === state.currentId) items[i].classList.add('active');
+      else items[i].classList.remove('active');
+    }
+    var footItems = dom.navFoot.querySelectorAll('.nav-item');
+    for (var j = 0; j < footItems.length; j++) {
+      if (state.currentId === SELFCHECK_ID) footItems[j].classList.add('active');
+      else footItems[j].classList.remove('active');
+    }
+  }
+
+  async function loadRegistry() {
+    try {
+      var data = await api('/api/panel/registry');
+      if (!data || data.ok !== true) {
+        throw apiError(text(data && data.error, '注册表接口未返回 ok'), 'payload');
+      }
+      state.host = (data.host && typeof data.host === 'object') ? data.host : null;
+
+      var list = Array.isArray(data.panels) ? data.panels : [];
+      state.panels = list
+        .filter(function (p) { return p && typeof p === 'object' && hasText(p.id); })
+        .slice()
+        .sort(function (a, b) {
+          var oa = (typeof a.order === 'number' && isFinite(a.order)) ? a.order : Number.MAX_SAFE_INTEGER;
+          var ob = (typeof b.order === 'number' && isFinite(b.order)) ? b.order : Number.MAX_SAFE_INTEGER;
+          if (oa !== ob) return oa - ob;
+          return String(a.id).localeCompare(String(b.id));
+        });
+
+      dom.hostVersion.textContent = (state.host && hasText(state.host.version))
+        ? '宿主 v' + String(state.host.version)
+        : '宿主版本 —';
+      renderNav();
+      clearBanner('registry');
+      return true;
+    } catch (e) {
+      var msg = e && e.message ? e.message : String(e);
+      renderNavError(msg);
+      renderNavFoot();   // 注册表挂了，自检入口仍必须可用
+      setBanner('registry', 'bad', '注册表加载失败：' + msg);
+      if (state.host === null) dom.hostVersion.textContent = '宿主版本 —';
+      return false;
+    }
+  }
+
+  /* ==================================================================
+     视图加载（含 hash 路由）
+     ================================================================== */
+
+  async function loadView(id) {
+    if (!hasText(id)) return;
+    // 防叠加不等于丢弃：在飞时把目标记下来，落地后再补发，
+    // 否则「轮询在飞时点另一个面板」会被静默吞掉，界面空等一个周期。
+    if (state.inflight) {
+      state.pendingId = id;
+      return;
+    }
+    state.inflight = true;
+    state.pendingId = null;
+    try {
+      if (id === SELFCHECK_ID) {
+        await loadSelfcheck();
+        return;
+      }
+      if (!isKnownPanel(id)) {
+        renderPanelDegraded(id, '面板不存在或未在注册表中：' + id);
+        return;
+      }
+
+      clearBanner('degraded');
+      try {
+        var data = await api('/api/panel/view?id=' + encodeURIComponent(id));
+        // 竞态保护：请求在飞时用户切了面板，旧结果不得覆盖新视图
+        if (state.currentId !== id) return;
+
+        if (!data || data.ok !== true) {
+          renderPanelDegraded(id, text(data && data.error, '宿主未返回错误详情'));
+          return;
+        }
+        var blocks = (data.spec && Array.isArray(data.spec.blocks)) ? data.spec.blocks : [];
+        renderPanel(id, data, blocks);
+        if (data.degraded === true) {
+          setBanner('degraded', 'warn',
+            '面板降级运行：宿主标记 degraded（durationMs '
+            + (typeof data.durationMs === 'number' ? Math.round(data.durationMs) : '缺失') + '）');
+        }
+      } catch (e) {
+        if (state.currentId !== id) return;
+        renderPanelDegraded(id, e && e.message ? e.message : String(e));
+      }
+    } finally {
+      state.inflight = false;
+      var queued = state.pendingId;
+      state.pendingId = null;
+      if (queued && queued !== id) {
+        // 不 await：先让本次调用收尾，补发不再叠加等待
+        loadView(queued).catch(function (e) {
+          setBanner('onerror', 'bad', '刷新失败：' + (e && e.message ? e.message : String(e)));
+        });
+      }
+    }
+  }
+
+  function renderPanel(id, data, blocks) {
+    var title = panelTitleOf(id);
+    var durationMs = (typeof data.durationMs === 'number') ? data.durationMs : null;
+    renderPanelShell(title, durationMs);
+    if (hasText(data.generatedAt)) {
+      dom.panelDuration.title = '生成时间：' + fmtTime(data.generatedAt);
+    }
+    clearPanelBody();
+
+    var ctx = {
+      panelId: id,
+      panelTitle: title,
+      actionIndex: buildActionIndex(blocks, data.actions)
+    };
+    dom.panelBody.appendChild(renderBlocks(blocks, ctx));
+  }
+
+  function refreshCurrent() {
+    return loadView(state.currentId);
+  }
+
+  function switchPanel(id) {
+    state.currentId = id;
+    updateNavActive();
+    renderPanelShell(panelTitleOf(id), null);
+    clearPanelBody();
+    updateHash(id);
+    return loadView(id);
+  }
+
+  function readHashPanelId() {
+    var hash = String(window.location.hash || '');
+    var m = /^#\/panel\/(.+)$/.exec(hash);
+    if (!m) return null;
+    var id = m[1];
+    try {
+      id = decodeURIComponent(id);
+    } catch (e) {
+      // 非法百分号编码：按原文处理，交给「面板不存在」路径，不抛错
+    }
+    return id === '' ? null : id;
+  }
+
+  function updateHash(id) {
+    var target = '#/panel/' + encodeURIComponent(id);
+    if (String(window.location.hash) !== target) window.location.hash = target;
+  }
+
+  function onHashChange() {
+    var id = readHashPanelId();
+    if (!id || id === state.currentId) return;
+    switchPanel(id);
+  }
+
+  /* ==================================================================
+     宿主自检（外壳自带项，不来自注册表）
+     ================================================================== */
+
+  async function loadSelfcheck() {
+    clearBanner('degraded');
+    try {
+      var data = await api('/api/panel/selfcheck');
+      if (state.currentId !== SELFCHECK_ID) return;
+      if (!data || data.ok !== true) {
+        renderPanelDegraded(SELFCHECK_ID, text(data && data.error, '自检接口未返回 ok'));
+        return;
+      }
+      renderSelfcheck(data);
+    } catch (e) {
+      if (state.currentId !== SELFCHECK_ID) return;
+      renderPanelDegraded(SELFCHECK_ID, e && e.message ? e.message : String(e));
+    }
+  }
+
+  function renderSelfcheck(data) {
+    var host = (data && data.host && typeof data.host === 'object') ? data.host : {};
+    var list = Array.isArray(data && data.panels) ? data.panels : [];
+    var rows = list.filter(function (p) { return p && typeof p === 'object'; });
+
+    // 先归一化再进通用表格：格式化留在数据层，渲染层只负责画
+    var tableRows = rows.map(function (p) {
+      var health = hasText(p.health) ? String(p.health) : 'unknown';
+      return {
+        id: text(p.id),
+        title: text(p.title),
+        health: health + '（' + healthLabel(health) + '）',
+        lastOkAt: fmtTime(p.lastOkAt),
+        lastDurationMs: (typeof p.lastDurationMs === 'number' && isFinite(p.lastDurationMs))
+          ? Math.round(p.lastDurationMs) + ' ms'
+          : '—',
+        lastError: text(p.lastError)
+      };
+    });
+
+    var blocks = [
+      {
+        kind: 'metrics',
+        title: '宿主',
+        items: [
+          { label: '宿主版本', value: text(host.version) },
+          { label: '启动时间', value: fmtTime(host.startedAt) },
+          { label: '运行时长', value: fmtDuration(host.uptimeMs) },
+          { label: '面板数', value: String(tableRows.length) }
+        ]
+      },
+      {
+        kind: 'table',
+        title: '面板实测健康',
+        columns: [
+          { key: 'id', label: 'id' },
+          { key: 'title', label: '标题' },
+          { key: 'health', label: '健康' },
+          { key: 'lastOkAt', label: '最近正常' },
+          { key: 'lastDurationMs', label: '最近耗时', align: 'right' },
+          { key: 'lastError', label: '最近错误' }
+        ],
+        rows: tableRows
+      }
+    ];
+
+    renderPanelShell('宿主自检', null);
+    clearPanelBody();
+    dom.panelBody.appendChild(renderBlocks(blocks, {
+      panelId: SELFCHECK_ID,
+      panelTitle: '宿主自检',
+      actionIndex: new Map()
+    }));
+  }
+
+  /* ==================================================================
+     自动刷新（可见才轮询；隐藏即停；恢复可见立刻补一次）
+     ================================================================== */
+
+  function stopTick() {
+    if (tickTimer !== null) {
+      window.clearInterval(tickTimer);
+      tickTimer = null;
+    }
+  }
+
+  function scheduleTick() {
+    stopTick();
+    if (state.autoRefresh !== true) return;
+    tickTimer = window.setInterval(tick, REFRESH_MS);
+  }
+
+  function tick() {
+    if (state.autoRefresh !== true) return;
+    if (document.visibilityState !== 'visible') return;   // 双保险：隐藏时绝不打扰宿主
+    refreshCurrent();
+  }
+
+  function onVisibilityChange() {
+    if (document.visibilityState === 'visible') {
+      if (state.autoRefresh === true) {
+        refreshCurrent();     // 恢复可见立即刷新一次，避免看到陈旧数据
+        scheduleTick();
+      }
+    } else {
+      stopTick();             // 后台不轮询：省宿主开销，也省电
+    }
+  }
+
+  async function refreshAll() {
+    // 不在这里挡并发：视图请求的合并交给 loadView 的 pending 机制处理，
+    // 这里早退会让「轮询在飞时点刷新」变成毫无反馈的死按钮。
+    await loadRegistry();
+
+    var id = state.currentId;
+    if (id && id !== SELFCHECK_ID && !isKnownPanel(id)) {
+      // 面板在注册表里消失了（插件被卸载/禁用）：退回可用视图，而不是白屏
+      if (state.panels.length > 0) {
+        var first = String(state.panels[0].id);
+        updateHash(first);
+        return switchPanel(first);
+      }
+      updateHash(SELFCHECK_ID);
+      return switchPanel(SELFCHECK_ID);
+    }
+    return refreshCurrent();
+  }
+
+  /* ==================================================================
+     全局兜底：任何未捕获错误都要在界面上可见，而不是只躺在 console 里
+     ================================================================== */
+
+  function onWindowError(event) {
+    var msg = (event && event.message) ? event.message : '未知脚本错误';
+    if (event && event.filename) msg += '（' + event.filename + (event.lineno ? ':' + event.lineno : '') + '）';
+    setBanner('onerror', 'bad', '页面脚本错误：' + msg);
+  }
+
+  function onUnhandledRejection(event) {
+    var reason = event ? event.reason : null;
+    var msg = (reason && reason.message) ? reason.message : String(reason);
+    setBanner('onerror', 'bad', '未处理的异步错误：' + msg);
+  }
+
+  /* ==================================================================
+     启动
+     ================================================================== */
+
+  function cacheDom() {
+    dom.banners = document.getElementById('banners');
+    dom.navList = document.getElementById('navList');
+    dom.navFoot = document.getElementById('navFoot');
+    dom.panelTitle = document.getElementById('panelTitle');
+    dom.panelDuration = document.getElementById('panelDuration');
+    dom.panelBody = document.getElementById('panelBody');
+    dom.hostVersion = document.getElementById('hostVersion');
+    dom.autoRefresh = document.getElementById('autoRefresh');
+    dom.refreshBtn = document.getElementById('refreshBtn');
+  }
+
+  function bindHandlers() {
+    window.addEventListener('hashchange', onHashChange);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('error', onWindowError);
+    window.addEventListener('unhandledrejection', onUnhandledRejection);
+
+    dom.refreshBtn.addEventListener('click', function () { refreshAll(); });
+
+    dom.autoRefresh.addEventListener('change', function () {
+      state.autoRefresh = dom.autoRefresh.checked === true;
+      if (state.autoRefresh) {
+        scheduleTick();
+        refreshCurrent();
+      } else {
+        stopTick();
+      }
+    });
+  }
+
+  async function boot() {
+    cacheDom();
+    bindHandlers();
+    await loadRegistry();
+
+    var hashed = readHashPanelId();
+    if (hashed && (hashed === SELFCHECK_ID || isKnownPanel(hashed))) {
+      switchPanel(hashed);          // 分享/刷新的 hash 优先，保持链接可复现
+    } else if (state.panels.length > 0) {
+      var first = String(state.panels[0].id);
+      updateHash(first);
+      switchPanel(first);
+    } else {
+      updateHash(SELFCHECK_ID);     // 没有可用面板时，自检视图是最后一块可用的地板
+      switchPanel(SELFCHECK_ID);
+    }
+
+    state.autoRefresh = dom.autoRefresh.checked === true;
+    scheduleTick();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+</script>
+</body>
+</html>
