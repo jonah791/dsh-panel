@@ -1,6 +1,6 @@
 # dsh-panel 语义文档 v0.1 — 面板宿主（Panel Host）
 
-> 版本 v0.1 · 2026-09-12（文档 2026-09-13）· 作者：爱丽丝 · 状态：**已实现（M1 宿主 + M2 首个消费方；验收 4/10，见 §9）**
+> 版本 v0.3 · 2026-09-12（文档 2026-09-13）· 作者：爱丽丝 · 状态：**已实现（M1 宿主 + M2 四面板收口 + 唯一 GUI 入口；验收 4/10，见 §9）**
 > 开发模式：**语义文档优先**——先写下"它应当是什么"，再让实现逼近本文档，最后由实践反过来修改本文档。
 > 本文档与被约束的代码同仓（`self-plugins/dsh-panel/docs/semantic.md`），随 GitHub 版本化。
 > 实现落点：`self-plugins/dsh-panel/src/*` + `self-plugins/dsh-growth-profile/src/panel.ts`
@@ -20,6 +20,7 @@
 |---|---|---|---|
 | 2026-09-12 | — | 初稿，尚无实现 | — |
 | 2026-09-12 | §10 Q1–Q6 | 主人放开了沙箱与审批（自主执行授权），未逐条裁决六问 | **按文档建议默认执行且标注为"临时默认"**，待主人复核后修订；改动均可逆（Q1 升级现有仓库 = 可回退 tag；Q3 尚未实施；Q5 默认关闭；Q6 拒绝派发只收紧不放宽） |
+| 2026-09-13 | §6（官方 client slot = 不采用） | 主人定调「GUI 只留 1 个入口」→ 本插件**新增 `./client` 导出**，注册官方会话头「面板」按钮（唯一入口，点击仅 `window.open('/panel/')`） | **登记为唯一例外并改文档**：§6 改为"原则上不采用 + §6.1 唯一例外"。该例外不含会话/视图耦合（无 remote/RPC、无 Conversation Node），代价被压到"一个按钮"；从此自研插件不得再自行注册 GUI 槽位 |
 
 ---
 
@@ -200,7 +201,16 @@ type ActionSpec = {
 |---|---|---|---|---|
 | **独立页** | `webServer.register('/panel/')` + 自包含 HTML | 零官方 client 依赖；官方升级不易碎 | 与对话界面分离，需要单独切换/开标签 | **主通道** |
 | **官方 index 注入** | `webserver/index-inject` 结构化行（`global/script/script-src/style/html`） | 可在官方页面加入口/徽标/样式，主人不必记 URL | 依赖官方 DOM/样式约定，有升级耦合 | `[待定]`：M3 评估，先做"轻量导航入口"而不是深度嵌 UI |
-| **官方 client slot / Conversation Node** | 官方 client bundle（08-16 成长档案 tab 先例） | 与对话同屏，体验最佳 | bundle + 版本对齐成本（09-11 审计已量化） | **不采用**（保持"面板不跟官方版本纠缠"的初衷） |
+| **官方 client slot / Conversation Node** | 官方 client bundle（08-16 成长档案 tab 先例） | 与对话同屏，体验最佳 | bundle + 版本对齐成本（09-11 审计已量化） | **原则上不采用**——**唯一例外见 §6.1**（本插件自己的入口按钮） |
+
+### 6.1 唯一例外：面板入口按钮（2026-09-13 主人定调）
+
+主人定调：**GUI 只留 1 个入口——打开面板宿主 `/panel/`；其余自研前端全部改成面板宿主里的一页**。据此：
+
+- 本插件**自己**提供 `./client`（`src/client/index.tsx`），只注册**一个** `conversation.session.header.actions` 贡献：`id=panel`、`order=20`、`label=面板`，点击 `window.open('/panel/', '_blank', 'noopener')`。
+- **例外为什么可以被接受**（对照 §6 的代价）：本 bundle 不做任何 RPC（不需要 `remote`/`$mount`）、不注册 Conversation Node、不做 CSS Modules——对官方客户端的依赖面收敛为「槽位名 + 一个按钮」，是 §6 所列三种代价里最小的形态。
+- **纪律**：此例外**只属于本插件**。其余插件**不得**再注册任何官方 GUI 槽位（含 `conversation.session.header.actions` / `conversation.view` / `shell.overlay` / `conversation.chat.*`）；需要界面就交面板贡献（§4.1）。
+- **产物协议**（实现事实，勿与源码混淆）：Web 客户端模块系统加载的是 `lib/client.js` 的**字节**，它必须自行调用 `window.__ModuleLoader__.load({ id: <包名>, factory })`，且 `exports` 必须有 `apply`（缺失会白屏）。构建链：`tsdown` → `lib/client.cjs` → `scripts/wrap-client.mjs` → `lib/client.js`（`npm run bundle`）。注意 `build` 只跑 host 侧 `tsc`（tsconfig `exclude: ["src/client"]`），**改客户端源码必须另跑 `npm run bundle`**，否则线上仍跑旧产物。
 
 ---
 
@@ -223,6 +233,7 @@ type ActionSpec = {
 |---|---|---|
 | **M1** | 宿主内核（服务 + 路由 + 渲染器 + 动作派发 + 自检面板）；**插件管理面板迁为 Panel #1**（吃自己的狗粮）；契约单测 + 尸体测试 | §9-1~9-9 全过；`/panel/` 可浏览插件管理且行为与旧版等价 |
 | **M2** | 迁入 growth-profile（成长档案）、taskboard（任务板）、teams（成员状态）为声明式面板 | 各旧路由保留一个版本周期（兼容），新面板数据与旧页一致（对照验收） |
+| **M2（2026-09-13 达成）** | 宿主内置 4 个面板：`plugin-manager`(10) / `taskboard`(20) / `growth-profile`(30) / `agent-teams`(40)——后三个**自包含取数**（直读 `.taskboard` / `.dsh` / `.agent-teams` 落盘），不依赖对应插件的运行期实现 | 注册表实测 4 个面板可见；`growth_profile` 工具与 `/api/growth-profile` 路由保持不动；四个自研插件的官方 GUI 槽位撤除（见 §6.1 纪律） |
 | **M3** | 官方 index 轻量导航入口；SSE 或增量刷新；面板搜索/置顶；`ctx.panel` 服务对外发布 + README/命名核对 + 可选 release | 主人可从官方界面一键进入面板；贡献方接入只需 ≤ 30 行 |
 
 `[待定]` 关于 `plugin-inventory`：官方已提供只读插件投影（Remote-only，无同进程 Cordis 合并）。M1 的插件管理面板**先保留自扫实现**（它需要挂载/启停等写操作，官方服务只读且走 RPC）；M2 评估是否用官方投影替换"读取"部分以降低维护面。
@@ -281,6 +292,13 @@ type ActionSpec = {
 - **被实践补充（调用点清单）**：文档原先只写「消费方注册面板」，实现时才发现接入方式有 3 种（inject 等待 / get 探测 / 直接 import），只有 1 种正确。→ 教训与 web 生命周期文档同源：**只写「谁做什么」不够，必须写「在哪些调用点生效」**（已回写技能 `semantic-doc-first` 反模式 ②）。
 - **被实践确认（破坏性动作守卫）**：宿主对触及「须请示三类」的动作一律拒绝并转审批通道——M1 实现中未出现绕行需求。
 
+### 11.7 · 实践修订记录（M2 收口 + 唯一 GUI 入口 · 2026-09-13）
+
+- **被主人定调并回写**：GUI 只留 1 个入口（面板宿主），其余自研前端降级为面板里的一页 → 新增 §6.1（唯一例外 + "其余插件不得再注册官方 GUI 槽位"的纪律），并把它登记进 §0 偏离日志。
+- **被实践补充（契约硬约束：面板 id 全局唯一）**：`dsh-growth-profile` 原以消费方身份注册了 `growth-profile` 面板（M2 首个消费方）。宿主内置同名面板后，两处注册会让 `PanelRegistry.register` **fail-loud 抛错**（`duplicate panel id`）→ 已移除消费方注册，工具与旧路由保持不变。教训：**"迁入"意味着所有权转移，必须显式撤除旧持有者的注册**，否则不是重复显示而是一条加载错误。
+- **被实践暴露（文档未写的产物事实）**：`build` 脚本只编译 host 侧（tsconfig `exclude: ["src/client"]`），而 Web 加载的是 `lib/client.js` 字节 → **改客户端源码不跑 `bundle` 等于没改**。四个被撤槽位的插件里，只有 growth-profile 具备可跑的打包管线（tsdown + react 已装）；plugin-manager 与 taskboard 的 `lib/client.js` 是 2026-08-16 的旧 rolldown 产物、**未被 git 跟踪**、且其 `node_modules` 缺少 tsdown —— 无法从其源码重建（已升级为"改客户端源码 = 必须重建产物"的显式警告，见 §6.1 末条）。
+- **被实践补充（面板取数口径）**：三个新面板一律**自包含直读落盘**（不 import 其他插件、不做 RPC），因此"插件缺席"只表现为少一块数据，不会让面板或宿主加载失败。
+
 ---
 
 ## 11.6 · 与实现的关系
@@ -299,3 +317,4 @@ type ActionSpec = {
 |---|---|---|
 | v0.1 | 2026-09-12 | 初稿：定位/术语/概念模型/契约（注册·视图规格·动作 ABI·HTTP 面·失效语义）/信任边界/三条 GUI 通道取舍/迁移 M1-M3/10 条可证伪验收/6 个未决问题 |
 | v0.2 | 2026-09-12 | **实践回修（第三拍）**：§4.1 新增接入方式 `[MUST]`（inject 等待 > get 探测）；新增 §11.5 实践修订记录（4 条：被确认/被修正/被补充×2）；新增 §11.6 与实现的关系（补系统必备节，修 D4）；登记进语义文档系统 `docs/semantics/registry.json`（id=panel-host） |
+| v0.3 | 2026-09-13 | **M2 收口 + 唯一 GUI 入口**：§6 新增 §6.1（面板入口按钮 = 官方 client slot 的唯一例外，含产物协议与 `bundle` 警告）；§8 新增 M2 达成行（宿主内置 4 面板）；新增 §11.7 实践修订记录（4 条：主人定调回写 / 面板 id 唯一性 / build 不重建 client 产物 / 取数口径）；§0 偏离日志新增一行 |

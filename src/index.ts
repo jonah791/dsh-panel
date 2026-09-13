@@ -1,31 +1,36 @@
 /**
- * dsh-panel — 独立实时前端面板（零官方 client 依赖）
+ * dsh-panel — 面板宿主（Panel Host · v0.2）
  *
- * 主人 2026-09-05 定调：官方 web 的 client 面板（slot/Remote/codec）随 alpha 升级易失效，
- * 不想再跟官方 web 兼容性纠缠——做独立前端，宿主托管自包含 HTML，走 HTTP API。
+ * 语义文档：docs/semantic.md（本文件是它的实现形态；冲突时先登记偏离日志再决定改谁）。
+ * 主人 2026-09-12 定调：前端统一走这个宿主——其他插件不再各写一套界面，只提交一份「声明」。
  *
- * 架构：
- *   - GET  /panel/         → 自包含 HTML（内联 JS/CSS，无任何 @deepseek-ai/dsh-client-* 依赖）
- *   - GET  /api/panel/state → 插件列表 JSON（registry 快照）
- *   - POST /api/panel/op   → 操作 {op: start|stop|unmount|remove, name, profile}
- *   同源 fetch 自动带认证 cookie（页面由宿主 webServer 托管）——零 token 手写。
+ * 三条通道：
+ *   ① 主通道 = 本宿主独立页 `/panel/`（零官方 client 依赖，官方升级不易碎）
+ *   ② 增强通道 = 官方 index-inject 行（M3 评估，尚未实施）
+ *   ③ 不采用 = 官方 client slot（版本对齐成本已量化）
  *
- * 数据源（自包含实现，不依赖 dsh-agent-plugin-manager）：
- *   - 扫 self-plugins 目录（package.json 元数据 + lib 构建态 + defineTool 提取）
- *   - 读 profiles/<profile>/cordis.patch.yml 的 insert 行（挂载/禁用态 + config 快照）
- *   - 操作 = 改 patch（备份 + 原子写）+ 写哨兵（watch 预检重启）
+ * 权威划分（语义文档 §3）：数据权威归消费方；呈现权威归宿主；**健康权威归宿主实测**。
  *
- * 首版范围：插件管理（列表/详情/启停/挂载/卸载/创建/配置查看）。
  * @module dsh-panel
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import z from '@deepseek-ai/schemastery'
-import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdirSync, renameSync, copyFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import { PanelHost } from './host.ts'
+import { createPluginManagerPanel } from './panels/plugin-manager.ts'
+import type { PluginManagerDeps } from './panels/plugin-manager.ts'
+import { createTaskboardPanel } from './panels/taskboard.ts'
+import { createGrowthProfilePanel } from './panels/growth-profile.ts'
+import { createAgentTeamsPanel } from './panels/agent-teams.ts'
+import type { ViewSpec } from './types.ts'
+
+/** 宿主版本（自检面板与 registry 展示，与 package.json 同步维护）。 */
+export const VERSION = '0.2.0'
 
 export const name = 'agent-panel'
 export const inject = ['webServer'] as const
@@ -35,280 +40,67 @@ export interface Config {
   dshHome: string
   profilesDir: string
   selfPluginsDir: string
-  /** 默认操作目标 profile（web）。 */
+  /** 面板操作与展示的默认目标 profile。 */
   defaultProfile: string
+  /** 取数超时（ms）：超过即判该面板降级，不阻塞其余面板（语义文档 §4.5）。 */
+  viewTimeoutMs: number
+  /** 动作执行超时（ms）。 */
+  actionTimeoutMs: number
 }
+
 export const Config = z.object({
   enabled: z.boolean().default(true),
   dshHome: z.string().default(''),
   profilesDir: z.string().default(''),
   selfPluginsDir: z.string().default(''),
   defaultProfile: z.string().default('web'),
+  viewTimeoutMs: z.natural().default(2000),
+  actionTimeoutMs: z.natural().default(10_000),
 })
 
 // ---------- 路径解析 ----------
-function dshHome(cfg: Config): string {
+function dshHomeOf(cfg: Config): string {
   return cfg.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
 }
-function profilesDir(cfg: Config): string {
-  return cfg.profilesDir || join(dshHome(cfg), 'profiles')
+function workspaceOf(cfg: Config): string {
+  return resolve(dshHomeOf(cfg), '..')
 }
-function selfPluginsDir(cfg: Config): string {
-  return cfg.selfPluginsDir || join(dshHome(cfg), '..', 'self-plugins')
+function profilesDirOf(cfg: Config): string {
+  return cfg.profilesDir || join(dshHomeOf(cfg), 'profiles')
+}
+function selfPluginsDirOf(cfg: Config): string {
+  return cfg.selfPluginsDir || join(workspaceOf(cfg), 'self-plugins')
 }
 
-// ---------- 面板 HTML（独立文件 lib/assets/panel.html，运行时读——根治 TS 模板字符串转义） ----------
-let _panelHtmlCache: string | null = null
-function panelHtml(): string {
-  if (_panelHtmlCache !== null) return _panelHtmlCache
+// ---------- 资产（独立文件，永不嵌 TS 模板字符串：dsh-panel-plugin 技能铁律） ----------
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.json': 'application/json; charset=utf-8',
+}
+
+/** 资产目录候选（构建产物优先，开发态兜底）。 */
+function assetDirs(): string[] {
   const here = dirname(fileURLToPath(import.meta.url)) // lib/
-  const candidates = [
-    join(here, 'assets', 'panel.html'),
-    join(here, '..', 'src', 'assets', 'panel.html'), // 开发态（src 直跑）
-  ]
-  for (const p of candidates) {
-    try {
-      if (existsSync(p)) {
-        _panelHtmlCache = readFileSync(p, 'utf8')
-        return _panelHtmlCache
-      }
-    } catch { /* 继续找 */ }
-  }
-  return '<!DOCTYPE html><html><body><h1>panel.html 缺失</h1></body></html>'
+  return [join(here, 'assets'), join(here, '..', 'src', 'assets')]
 }
 
-// ---------- 插件档案（轻量版，对齐 plugin-manager registry 语义） ----------
-interface PanelPlugin {
-  name: string
-  version: string
-  source: 'self' | 'official' | 'unknown'
-  path: string | null
-  purpose: string
-  tools: string[]
-  built: boolean
-  status: 'mounted' | 'disabled' | 'unmounted'
-  profile?: string
-  config: Record<string, unknown>
-  hasClient: boolean
-}
-
-/** 读 patch 的 insert 行：返回 Map<name, {id, disabled, config}>（轻量文本解析，不引 js-yaml）。 */
-function readPatchInserts(patchFile: string): Map<string, { id: string; disabled: boolean; config: Record<string, unknown> }> {
-  const out = new Map<string, { id: string; disabled: boolean; config: Record<string, unknown> }>()
-  try {
-    if (!existsSync(patchFile)) return out
-    const text = readFileSync(patchFile, 'utf8')
-    const lines = text.split(/\r?\n/)
-    let inInsert = false
-    let curId: string | null = null
-    let curName: string | null = null
-    let curDisabled = false
-    let curConfig: Record<string, unknown> | null = null
-    const flush = (): void => {
-      if (curId !== null && curName !== null) {
-        out.set(curName, { id: curId, disabled: curDisabled, config: curConfig ?? {} })
-      }
-      curId = null; curName = null; curDisabled = false; curConfig = null
-    }
-    for (const line of lines) {
-      const t = line.trim()
-      if (t.startsWith('- insert:')) { flush(); inInsert = true; continue }
-      if (inInsert && /^-\s+\w/.test(t) && !t.startsWith('- id:') && !t.startsWith('- name:') && !t.startsWith('  ')) {
-        // 新顶层项（非 insert 块）
-        flush(); inInsert = false
-      }
-      if (!inInsert) {
-        if (/^\s*-\s*id:/.test(t)) { flush(); const m = t.match(/id:\s*([\w@./-]+)/); if (m && m[1]) curId = m[1] }
-        continue
-      }
-      const idm = t.match(/^-\s*id:\s*([\w@./-]+)/)
-      if (idm && idm[1]) { flush(); curId = idm[1]; continue }
-      const namem = t.match(/^name:\s*([\w@./-]+)/)
-      if (namem && namem[1]) { curName = namem[1]; continue }
-      if (/^disabled:\s*true/.test(t)) curDisabled = true
-    }
-    flush()
-  } catch { /* 读失败 → 空 */ }
-  return out
-}
-
-/** 扫描 self-plugins 目录 → 插件档案（不含挂载态；由调用方对账 patch）。 */
-function scanSelf(dir: string): PanelPlugin[] {
-  const out: PanelPlugin[] = []
-  try {
-    if (!existsSync(dir)) return out
-    for (const name of readdirSync(dir)) {
-      if (name.startsWith('.')) continue
-      const p = join(dir, name)
-      try {
-        if (!statSync(p).isDirectory()) continue
-        const pkgPath = join(p, 'package.json')
-        if (!existsSync(pkgPath)) continue
-        const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as Record<string, unknown>
-        // tools 提取（递归扫 lib/*.js + src/*.ts 的 defineTool name——拆分模块也覆盖）
-        const tools: string[] = []
-        const toolSrcs: string[] = []
-        for (const base of ['lib', 'src']) {
-          const bp = join(p, base)
-          if (!existsSync(bp)) continue
-          const walkJs = (d: string): void => {
-            for (const e of readdirSync(d)) {
-              const fp = join(d, e)
-              try {
-                const st = statSync(fp)
-                if (st.isDirectory()) walkJs(fp)
-                else if (e.endsWith('.js') || e.endsWith('.ts')) toolSrcs.push(fp)
-              } catch { /* 跳过 */ }
-            }
-          }
-          walkJs(bp)
-        }
-        const toolRe = /defineTool\s*\(\s*\{[\s\S]{0,500}?name:\s*'([a-zA-Z_][\w]*)'/g
-        for (const fp of toolSrcs) {
-          let text = ''
-          try { text = readFileSync(fp, 'utf8') } catch { continue }
-          let m: RegExpExecArray | null
-          while ((m = toolRe.exec(text))) { if (m[1] && !tools.includes(m[1])) tools.push(m[1]) }
-        }
-        tools.sort()
-        // built 判定（lib 新于 src）
-        let built = false
-        const lib = join(p, 'lib')
-        const src = join(p, 'src')
-        if (existsSync(lib)) {
-          if (!existsSync(src)) built = true
-          else {
-            let libNew = 0; let srcNew = 0
-            const walk = (d: string, cb: (t: number) => void): void => {
-              for (const e of readdirSync(d)) {
-                const fp = join(d, e)
-                try {
-                  const st = statSync(fp)
-                  if (st.isDirectory()) walk(fp, cb)
-                  else cb(st.mtimeMs)
-                } catch { /* 跳过 */ }
-              }
-            }
-            walk(lib, (t) => { if (t > libNew) libNew = t })
-            walk(src, (t) => { if (t > srcNew) srcNew = t })
-            built = libNew >= srcNew
-          }
-        }
-        out.push({
-          name,
-          version: String(pkg.version ?? ''),
-          source: 'self',
-          path: p,
-          purpose: String(pkg.description ?? ''),
-          tools,
-          built,
-          status: 'unmounted',
-          config: {},
-          hasClient: Boolean((pkg as { dsh?: { client?: unknown } }).dsh?.client),
-        })
-      } catch { /* 单插件损坏跳过 */ }
-    }
-  } catch { /* 目录不可读 */ }
-  return out.sort((a, b) => a.name.localeCompare(b.name))
-}
-
-/** 对账：self 插件 + patch insert → 完整档案（status 由 patch 决定）。 */
-function buildState(cfg: Config, profile: string): { plugins: PanelPlugin[]; profiles: string[]; generatedAt: string; patchFile: string } {
-  const self = scanSelf(selfPluginsDir(cfg))
-  const patchFile = join(profilesDir(cfg), profile, 'cordis.patch.yml')
-  const inserts = readPatchInserts(patchFile)
-  const byName = new Map(self.map((p) => [p.name, p] as const))
-  // official/unknown：patch 里有但 self 目录没有的（如 @deepseek-ai/*）——列出 name 即可（来源标记）
-  const profiles: string[] = []
-  try {
-    const pd = profilesDir(cfg)
-    if (existsSync(pd)) {
-      for (const e of readdirSync(pd)) {
-        if (statSync(join(pd, e)).isDirectory() && existsSync(join(pd, e, 'cordis.patch.yml'))) profiles.push(e)
-      }
-    }
-  } catch { /* 忽略 */ }
-
-  const plugins: PanelPlugin[] = []
-  const seen = new Set<string>()
-  for (const [name, row] of inserts) {
-    seen.add(name)
-    const selfP = byName.get(name)
-    if (selfP) {
-      selfP.status = row.disabled ? 'disabled' : 'mounted'
-      selfP.profile = profile
-      selfP.config = row.config ?? {}
-      plugins.push(selfP)
-    } else {
-      // patch 里有但非 self（official/third-party）
-      plugins.push({
-        name, version: '', source: name.startsWith('@') ? 'official' : 'unknown',
-        path: null, purpose: '（非 self-plugins 插件，来自 profile patch）',
-        tools: [], built: true, status: row.disabled ? 'disabled' : 'mounted',
-        profile, config: row.config ?? {}, hasClient: false,
-      })
+/**
+ * 读取一份外壳资产。
+ * @param relPath - 相对资产目录的文件名（已由调用方做过穿越校验）
+ * @returns 文本内容或 undefined（缺失 → 调用方返回 500 并显示可读提示）
+ */
+function readAsset(relPath: string): string | undefined {
+  for (const dir of assetDirs()) {
+    const file = join(dir, relPath)
+    if (existsSync(file)) {
+      try { return readFileSync(file, 'utf8') } catch { /* 继续找 */ }
     }
   }
-  // self 目录有但 patch 没有 = unmounted
-  for (const p of self) {
-    if (!seen.has(p.name)) plugins.push(p)
-  }
-  return { plugins, profiles, generatedAt: new Date().toISOString(), patchFile }
-}
-
-// ---------- 操作（改 patch + 写哨兵） ----------
-function patchSetDisabled(patchFile: string, name: string, disabled: boolean): { ok: boolean; error?: string } {
-  try {
-    const text = readFileSync(patchFile, 'utf8')
-    // 找到 name: <name> 所在 insert 块的 disabled 行（若有则改，无则插入）
-    const lines = text.split(/\r?\n/)
-    const nameIdx = lines.findIndex((l) => l.trim() === `name: ${name}`)
-    if (nameIdx === -1) return { ok: false, error: `patch 中未找到 name: ${name}` }
-    // 向上找所属 insert 块的 id 行，向下找块内 disabled 行
-    let blockStart = nameIdx
-    while (blockStart > 0) {
-      const line = lines[blockStart]
-      if (line === undefined) break
-      if (/^\s*-\s*id:/.test(line)) break
-      blockStart -= 1
-    }
-    // 块结束 = 下一个顶层 - id: 或 - insert:
-    let blockEnd = nameIdx
-    while (blockEnd < lines.length - 1) {
-      const nx = blockEnd + 1
-      const tnx = lines[nx]
-      if (tnx === undefined) break
-      const tt = tnx.trim()
-      if ((/^\s*-\s*id:/.test(tt) || /^- insert:/.test(tt)) && nx > blockStart) break
-      blockEnd = nx
-    }
-    const block = lines.slice(blockStart, blockEnd + 1)
-    const disIdx = block.findIndex((l) => /^\s*disabled:/.test(l.trim()))
-    const indent = '        '
-    if (disIdx >= 0) {
-      lines[blockStart + disIdx] = `${indent}disabled: ${disabled}`
-    } else {
-      // 插到 config 前（若无 config 插块尾）
-      const cfgIdx = block.findIndex((l) => /^\s*config:/.test(l.trim()))
-      if (cfgIdx >= 0) lines.splice(blockStart + cfgIdx, 0, `${indent}disabled: ${disabled}`)
-      else lines.splice(blockEnd + 1, 0, `${indent}disabled: ${disabled}`)
-    }
-    writeAtomic(patchFile, lines.join('\n'))
-    return { ok: true }
-  } catch (e) {
-    return { ok: false, error: String(e) }
-  }
-}
-
-function writeAtomic(file: string, content: string): void {
-  const tmp = file + '.panel-tmp'
-  writeFileSync(tmp, content, 'utf8')
-  renameSync(tmp, file)
-}
-
-function writeSentinel(dshHomeDir: string, note: string): void {
-  const file = join(dshHomeDir, '.hot-reload-flag')
-  writeFileSync(file, JSON.stringify({ workspace: join(dshHomeDir, '..'), note }, null, 2), 'utf8')
+  return undefined
 }
 
 // ---------- HTTP 辅助 ----------
@@ -316,85 +108,226 @@ function json(res: ServerResponse, code: number, data: unknown): void {
   res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
   res.end(JSON.stringify(data))
 }
+
+function html(res: ServerResponse, code: number, body: string): void {
+  res.writeHead(code, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+  res.end(body)
+}
+
 function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolvePromise, reject) => {
     let body = ''
-    req.on('data', (c: Buffer) => { body += c.toString('utf8'); if (body.length > 1_000_000) req.destroy() })
-    req.on('end', () => { try { resolvePromise(JSON.parse(body || '{}') as Record<string, unknown>) } catch { reject(new Error('bad json')) } })
+    req.on('data', (chunk: Buffer) => {
+      body += chunk.toString('utf8')
+      if (body.length > 1_000_000) req.destroy()
+    })
+    req.on('end', () => {
+      try { resolvePromise(JSON.parse(body === '' ? '{}' : body) as Record<string, unknown>) } catch { reject(new Error('请求体不是合法 JSON')) }
+    })
     req.on('error', reject)
   })
+}
+
+/** 自检面板（宿主内置，id 固定，不参与注册表避免自指递归）。 */
+function selfcheckSpec(host: PanelHost): ViewSpec {
+  const info = host.hostInfo()
+  const panels = host.health()
+  const uptime = Date.now() - Date.parse(info.startedAt)
+  return {
+    blocks: [
+      {
+        kind: 'metrics',
+        title: '宿主自检',
+        items: [
+          { label: '版本', value: info.version },
+          { label: '运行时长', value: `${Math.round(uptime / 60000)} 分钟` },
+          { label: '取数超时', value: `${String(info.viewTimeoutMs)}ms` },
+          { label: '动作超时', value: `${String(info.actionTimeoutMs)}ms` },
+          { label: '贡献面板', value: String(panels.length), tone: panels.length > 0 ? 'ok' : 'warn' },
+        ],
+      },
+      {
+        kind: 'table',
+        title: '贡献健康（**宿主实测**，不采信贡献方自报——语义文档 §4.5）',
+        columns: [
+          { key: 'id', label: 'id' },
+          { key: 'title', label: '面板' },
+          { key: 'health', label: '健康' },
+          { key: 'lastDurationMs', label: '最近耗时', align: 'right' },
+          { key: 'lastOkAt', label: '最近成功' },
+          { key: 'lastError', label: '最近错误' },
+        ],
+        rows: panels.map((p) => ({
+          id: p.id,
+          title: p.title,
+          health: p.health,
+          lastDurationMs: p.lastDurationMs === null ? '—' : `${String(p.lastDurationMs)}ms`,
+          lastOkAt: p.lastOkAt ?? '—',
+          lastError: p.lastError ?? '—',
+        })),
+      },
+      {
+        kind: 'text',
+        title: '语义',
+        lines: [
+          '健康度 = 连续失败次数 + 最近耗时（>1000ms 记 degraded，连续 ≥2 次失败记 down，无样本记 unknown）。',
+          '单面板取数失败只让该面板降级，外壳与其他面板不受影响。',
+          '触及「删数据 / 动凭据 / 动核心引擎」的动作由宿主拒绝派发（语义文档 §5.4）。',
+        ],
+      },
+    ],
+  }
 }
 
 // ---------- apply ----------
 export function apply(ctx: Context, config: Config): void {
   const logger = ctx.logger('dsh-panel')
   if (!config.enabled) return
-  const dh = dshHome(config)
+  const dh = dshHomeOf(config)
+  const startedAt = new Date().toISOString()
 
-  // GET /panel/ → 自包含 HTML
+  const host = new PanelHost(ctx, {
+    viewTimeoutMs: config.viewTimeoutMs,
+    actionTimeoutMs: config.actionTimeoutMs,
+    auditDir: join(dh, 'panel'),
+    slowMs: 1000,
+    version: VERSION,
+    startedAt,
+  })
+
+  // 内置面板 #1：插件管理（吃自己的狗粮——它只交声明，不碰路由/HTML）
+  const deps: PluginManagerDeps = {
+    dshHome: dh,
+    profilesDir: profilesDirOf(config),
+    selfPluginsDir: selfPluginsDirOf(config),
+    defaultProfile: config.defaultProfile,
+  }
+  ctx.effect(() => host.register(createPluginManagerPanel(deps)), 'dsh-panel: builtin plugin-manager')
+
+  // 内置面板 #2~#4：任务板 / 养成档案 / 分身。
+  // 三个都**自包含取数**（直接读 .taskboard / .dsh / .agent-teams 的落盘），
+  // 因此不依赖对应插件的运行期实现——面板只看数据，插件缺席也只少一块数据、不崩。
+  const workspace = workspaceOf(config)
+  ctx.effect(() => host.register(createTaskboardPanel({ workspace })), 'dsh-panel: builtin taskboard')
+  ctx.effect(() => host.register(createGrowthProfilePanel({ dshHome: dh, workspace })), 'dsh-panel: builtin growth-profile')
+  ctx.effect(() => host.register(createAgentTeamsPanel({ workspace })), 'dsh-panel: builtin agent-teams')
+
+  // ---------- 页面 ----------
+  const serveShell = (_req: IncomingMessage, res: ServerResponse): void => {
+    const shell = readAsset('shell.html')
+    if (shell === undefined) {
+      html(res, 500, '<!DOCTYPE html><meta charset="utf-8"><h1>面板外壳缺失</h1><p>缺少 lib/assets/shell.html —— 运行 pnpm build 生成。</p>')
+      return
+    }
+    html(res, 200, shell)
+  }
+  // 官方 webserver 契约：path 不以 / 结尾；两条都注册以容忍尾斜杠访问
+  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/panel', handler: serveShell }), 'dsh-panel: /panel')
+  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/panel/', handler: serveShell }), 'dsh-panel: /panel/')
+
+  // ---------- 资产（prefix 路由 + 穿越校验） ----------
   ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/panel/',
-    handler: (_req: IncomingMessage, res: ServerResponse) => {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-      res.end(panelHtml())
+    kind: 'prefix',
+    path: '/panel/assets',
+    handler: (req: IncomingMessage, res: ServerResponse) => {
+      const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname)
+      const rel = pathname.replace(/^\/panel\/assets\/?/, '')
+      const type = MIME[extname(rel)]
+      if (rel === '' || type === undefined) { res.writeHead(404); res.end(); return }
+      // 穿越校验：目标必须落在资产目录内（Windows 用 sep 判定，参照官方 frontend-static 教训）
+      for (const dir of assetDirs()) {
+        const target = resolve(normalize(join(dir, rel)))
+        if (target !== dir && !target.startsWith(dir + sep)) continue
+        if (!existsSync(target)) continue
+        try {
+          const body = readFileSync(target)
+          res.writeHead(200, { 'content-type': type })
+          res.end(body)
+          return
+        } catch { /* 换下一个候选目录 */ }
+      }
+      res.writeHead(404); res.end()
     },
-  }), 'dsh-panel: /panel/')
+  }), 'dsh-panel: /panel/assets')
 
-  // GET /api/panel/state → 插件列表
+  // ---------- API ----------
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
-    path: '/api/panel/state',
+    path: '/api/panel/registry',
     handler: (_req: IncomingMessage, res: ServerResponse) => {
       try {
-        const profile = config.defaultProfile
-        const state = buildState(config, profile)
-        json(res, 200, { ok: true, ...state })
+        json(res, 200, {
+          ok: true,
+          host: { version: VERSION, startedAt },
+          panels: [
+            ...host.list(),
+            { id: '__selfcheck', title: '宿主自检', order: 9999, icon: 'shield', description: '宿主与贡献的实测健康', health: 'ok' as const },
+          ],
+        })
       } catch (e) {
         json(res, 500, { ok: false, error: String(e) })
       }
     },
-  }), 'dsh-panel: /api/panel/state')
+  }), 'dsh-panel: /api/panel/registry')
 
-  // POST /api/panel/op → 操作
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
-    path: '/api/panel/op',
+    path: '/api/panel/view',
+    handler: async (req: IncomingMessage, res: ServerResponse) => {
+      try {
+        const url = new URL(req.url ?? '/', 'http://x')
+        const id = url.searchParams.get('id') ?? ''
+        if (id === '__selfcheck') {
+          json(res, 200, { ok: true, spec: selfcheckSpec(host), generatedAt: new Date().toISOString(), durationMs: 0, degraded: false, error: null })
+          return
+        }
+        const params: Record<string, string> = {}
+        for (const [k, v] of url.searchParams) if (k !== 'id') params[k] = v
+        const outcome = await host.view(id, params)
+        json(res, 200, outcome)
+      } catch (e) {
+        json(res, 500, { ok: false, error: String(e), degraded: true, spec: null })
+      }
+    },
+  }), 'dsh-panel: /api/panel/view')
+
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/api/panel/action',
     handler: async (req: IncomingMessage, res: ServerResponse) => {
       try {
         const body = await readBody(req)
-        const op = String(body.op ?? '')
-        const name = String(body.name ?? '')
-        const profile = String(body.profile ?? config.defaultProfile)
-        if (!name) { json(res, 400, { ok: false, error: 'name 必填' }); return }
-        const patchFile = join(profilesDir(config), profile, 'cordis.patch.yml')
-        let result: { ok: boolean; error?: string; note?: string }
-        switch (op) {
-          case 'start':
-          case 'enable':
-            result = patchSetDisabled(patchFile, name, false)
-            break
-          case 'stop':
-          case 'disable':
-            result = patchSetDisabled(patchFile, name, true)
-            break
-          case 'reload':
-            // 仅写哨兵触发重启（插件代码改了需要重启加载）
-            result = { ok: true, note: '已写哨兵，web 将预检重启' }
-            break
-          default:
-            json(res, 400, { ok: false, error: '未知 op: ' + op }); return
-        }
-        if (result.ok && op !== 'reload') {
-          writeSentinel(dh, 'panel op ' + op + ' ' + name)
-          result.note = '已修改 patch + 写哨兵（watch 将预检重启生效）'
-        }
-        json(res, 200, result)
+        const outcome = await host.dispatch({
+          panelId: String(body.panelId ?? ''),
+          actionId: String(body.actionId ?? ''),
+          params: body.params as Record<string, unknown> | undefined,
+          confirm: body.confirm === true,
+        })
+        // 审批门命中时，宿主把请示项落到日志（M2 接线任务板/Telegram，见语义文档 §5.4 [待逼近]）
+        const hint = (outcome.data as { approvalHint?: string } | undefined)?.approvalHint
+        if (hint !== undefined) logger.warn('面板请示（未执行）：' + hint)
+        json(res, outcome.ok ? 200 : outcome.status, outcome)
+      } catch (e) {
+        json(res, 400, { ok: false, error: String(e), status: 400 })
+      }
+    },
+  }), 'dsh-panel: /api/panel/action')
+
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/api/panel/selfcheck',
+    handler: (_req: IncomingMessage, res: ServerResponse) => {
+      try {
+        json(res, 200, {
+          ok: true,
+          host: { ...host.hostInfo(), uptimeMs: Date.now() - Date.parse(startedAt) },
+          panels: host.health(),
+        })
       } catch (e) {
         json(res, 500, { ok: false, error: String(e) })
       }
     },
-  }), 'dsh-panel: /api/panel/op')
+  }), 'dsh-panel: /api/panel/selfcheck')
 
-  logger.info('ready: dsh-panel 独立面板已挂载 → http://127.0.0.1:3080/panel/')
+  logger.info(`ready: 面板宿主 v${VERSION} → http://127.0.0.1:3080/panel/（贡献 ${String(host.list().length)} 个面板）`)
 }
