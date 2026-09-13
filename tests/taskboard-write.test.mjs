@@ -155,12 +155,24 @@ test('审批门：「删除任务」判定层 403 拒发，执行层再拒一次
   assert.match(direct.message, /须请示三类/)
 })
 
-test('视图列出的动作 = 贡献里可派的动作（防漂移）', () => {
+test('视图列出的动作 = 贡献里可派的动作（防漂移，含 tabs 内嵌块）', () => {
   const ws = makeWorkspace([PENDING])
   const spec = toTaskboardSpec({ workspace: ws })
-  const block = spec.blocks.find((b) => b.kind === 'actions')
-  assert.ok(block !== undefined, '任务板视图必须有动作块')
-  const listed = block.items.map((i) => i.actionId).sort()
+  // 动作块自 v0.5 起嵌在 tabs 的「写操作」页里：收集必须递归（sections + tabs）
+  const listed = []
+  const walk = (blocks) => {
+    for (const block of blocks) {
+      if (!block || typeof block !== 'object') continue
+      if (block.kind === 'actions' && Array.isArray(block.items)) {
+        for (const item of block.items) listed.push(String(item.actionId))
+      }
+      if (Array.isArray(block.blocks)) walk(block.blocks)
+      if (Array.isArray(block.items)) {
+        for (const item of block.items) if (item && Array.isArray(item.blocks)) walk(item.blocks)
+      }
+    }
+  }
+  walk(spec.blocks)
   const panel = createTaskboardPanel({ workspace: ws })
-  assert.deepEqual(listed, Object.keys(panel.actions).sort())
+  assert.deepEqual(listed.sort(), Object.keys(panel.actions).sort())
 })

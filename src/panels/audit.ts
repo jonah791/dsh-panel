@@ -137,7 +137,20 @@ export function toAuditSpec(deps: AuditDeps, params: Record<string, string> = {}
           { label: '被拒', value: String(counts.denied ?? 0), tone: (counts.denied ?? 0) > 0 ? 'warn' : 'muted' },
           { label: '失败', value: String(counts.error ?? 0), tone: (counts.error ?? 0) > 0 ? 'bad' : 'muted' },
           { label: '超时', value: String(counts.timeout ?? 0), tone: (counts.timeout ?? 0) > 0 ? 'bad' : 'muted' },
-          { label: '最近一次', value: newest === undefined ? '—' : `${newest.panelId}·${newest.actionId}` },
+          // 值只放动作名：指标卡是窄容器，`panelId·actionId` 这种长串会在卡里被硬断
+          // 成两行（视觉复核 2026-09-13 实测）——面板侧先短化，面板 id 移到 hint。
+          { label: '最近一次', value: newest === undefined ? '—' : newest.actionId, ...(newest === undefined ? {} : { hint: newest.panelId }) },
+        ],
+      },
+      {
+        kind: 'chart',
+        title: '结果分布（本次窗口）',
+        chart: 'donut',
+        series: [
+          { label: '成功', value: counts.ok ?? 0, tone: 'ok' },
+          { label: '被拒', value: counts.denied ?? 0, tone: 'warn' },
+          { label: '失败', value: counts.error ?? 0, tone: 'bad' },
+          { label: '超时', value: counts.timeout ?? 0, tone: 'bad' },
         ],
       },
       {
@@ -162,6 +175,18 @@ export function toAuditSpec(deps: AuditDeps, params: Record<string, string> = {}
           detail: (r.reason ?? r.message ?? '').slice(0, 100),
         })),
       },
+      {
+        kind: 'log',
+        title: `原始尾巴（最近 ${String(Math.min(records.length, 30))} 条）`,
+        lines: records.slice(-30).map((r) => ({
+          at: r.at.slice(11, 19),
+          level: r.outcome === 'ok' ? 'ok' : (r.outcome === 'denied' ? 'warn' : 'error'),
+          text: `${r.panelId}·${r.actionId} [${r.level}] ${r.outcome} ${String(r.durationMs)}ms`
+            + (r.paramsDigest === null ? '' : ` #${r.paramsDigest}`)
+            + (r.reason === undefined ? '' : ` (${r.reason})`)
+            + (r.message === undefined || r.message === '' ? '' : ` — ${r.message}`),
+        })),
+      },
       { kind: 'text', title: '来源与口径', lines },
     ],
   }
@@ -178,6 +203,7 @@ export function createAuditPanel(deps: AuditDeps): PanelContribution {
     order: 50,
     icon: 'history',
     description: '面板宿主的派发审计日志（谁在何时对哪个面板做了什么、结果如何）；只读，不提供改写通道',
+    style: { accent: '#a78bfa' },
     view: (params) => toAuditSpec(deps, params),
   }
 }

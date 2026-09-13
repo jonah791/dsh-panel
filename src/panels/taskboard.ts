@@ -164,48 +164,136 @@ export function toTaskboardSpec(deps: TaskboardDeps): ViewSpec {
   lines.push('写入动作：新建 / 认领 / 完成（write，直接生效）；「删除任务」标 destructive + requiresApproval——判定层 403 拒发、执行层再拒一次（面板不得成为绕过「须请示三类」的通道）。')
   lines.push('写入纪律：解析失败一律拒绝写入（只读路径可宽容按空板显示，写入路径绝不拿空板覆盖真实文件）。')
 
+  const archivedTotal = archives.reduce((sum, a) => sum + a.count, 0)
+
   return {
+    // 分页组织（tabs 是纯客户端切换）：概览看数、写操作真干活、来源与归档查账。
     blocks: [
       {
-        kind: 'metrics',
-        title: '任务板总览',
+        kind: 'tabs',
         items: [
-          { label: '待办', value: String(pending), tone: pending > 0 ? 'warn' : 'muted' },
-          { label: '进行中', value: String(claimed), tone: claimed > 0 ? 'ok' : 'muted' },
-          { label: '已完成', value: String(done), tone: 'muted' },
-          { label: '已取消', value: String(cancelled), tone: 'muted' },
-          { label: '板面合计', value: String(tasks.length) },
+          {
+            label: '概览',
+            badge: String(tasks.length),
+            blocks: [
+              {
+                kind: 'metrics',
+                title: '任务板总览',
+                items: [
+                  { label: '待办', value: String(pending), tone: pending > 0 ? 'warn' : 'muted' },
+                  { label: '进行中', value: String(claimed), tone: claimed > 0 ? 'ok' : 'muted' },
+                  { label: '已完成', value: String(done), tone: 'muted' },
+                  { label: '已取消', value: String(cancelled), tone: 'muted' },
+                  { label: '板面合计', value: String(tasks.length) },
+                  { label: '累计归档', value: String(archivedTotal) },
+                ],
+              },
+              {
+                kind: 'chart',
+                title: '状态分布',
+                chart: 'bar',
+                unit: ' 条',
+                series: [
+                  { label: '待办', value: pending, tone: 'warn' },
+                  { label: '进行中', value: claimed, tone: 'ok' },
+                  { label: '已完成', value: done, tone: 'muted' },
+                  { label: '已取消', value: cancelled, tone: 'bad' },
+                ],
+              },
+              {
+                kind: 'progress',
+                title: '闭环度（已终态 / 全部经手）',
+                items: [{
+                  label: '终态占比',
+                  value: done + cancelled + archivedTotal,
+                  max: Math.max(1, tasks.length + done + cancelled + archivedTotal),
+                  tone: 'ok',
+                  hint: `归档 ${String(archivedTotal)} · 板面 ${String(tasks.length)}`,
+                }],
+              },
+              {
+                kind: 'table',
+                title: '板面任务（pending / claimed）',
+                columns: [
+                  { key: 'id', label: 'id' },
+                  { key: 'title', label: '标题' },
+                  { key: 'priority', label: '优先级' },
+                  { key: 'status', label: '状态' },
+                  { key: 'assignee', label: '负责人' },
+                  { key: 'updatedAt', label: '更新' },
+                ],
+                rows: tasks.map((t) => ({
+                  id: t.id ?? '—',
+                  title: (t.title ?? '（无标题）').slice(0, 90),
+                  priority: t.priority ?? 'normal',
+                  status: t.status ?? '—',
+                  assignee: t.assignee ?? '—',
+                  updatedAt: (t.updatedAt ?? t.createdAt ?? '—').slice(0, 16).replace('T', ' '),
+                })),
+              },
+            ],
+          },
+          {
+            label: '写操作',
+            blocks: [
+              {
+                kind: 'form',
+                title: '新建任务',
+                actionId: 'post',
+                submitLabel: '新建',
+                note: '直接写入 .taskboard/tasks.json（write 级，无需确认）',
+                fields: [
+                  { name: 'title', label: '标题', type: 'text', required: true, placeholder: '一句话说清要做什么' },
+                  { name: 'type', label: '类型', type: 'select', options: [{ value: 'short', label: '短期' }, { value: 'long', label: '长期' }] },
+                  { name: 'priority', label: '优先级', type: 'select', options: ['low', 'normal', 'high'] },
+                  { name: 'description', label: '详情', type: 'textarea', placeholder: '验收判据 / 上下文 / 关联任务' },
+                ],
+              },
+              {
+                kind: 'form',
+                title: '认领 / 完成任务',
+                actionId: 'claim',
+                submitLabel: '认领',
+                note: '认领：pending → claimed；完成请在下方表单填 id（claimed → done 并归档）',
+                fields: [
+                  { name: 'taskId', label: '任务 id', type: 'text', required: true, placeholder: 't-xxxxxxxx' },
+                  { name: 'assignee', label: '负责人', type: 'text', placeholder: '缺省 alice' },
+                ],
+              },
+              {
+                kind: 'form',
+                title: '完成任务',
+                actionId: 'complete',
+                submitLabel: '完成并归档',
+                fields: [
+                  { name: 'taskId', label: '任务 id', type: 'text', required: true },
+                  { name: 'summary', label: '完成摘要', type: 'textarea', placeholder: '做了什么 / 证据 / 遗留' },
+                ],
+              },
+              {
+                kind: 'actions',
+                title: '全部动作（含审批门动作）',
+                items: actionItems(taskboardActions(deps)),
+              },
+            ],
+          },
+          {
+            label: '来源与归档',
+            badge: String(archives.length),
+            blocks: [
+              { kind: 'text', title: '归档与来源', lines },
+              {
+                kind: 'list',
+                title: '归档文件',
+                items: archives.slice(0, 10).map((a) => ({
+                  title: a.file,
+                  subtitle: `${a.archivedAt} · ${String(a.count)} 条`,
+                  tags: ['terminal'],
+                })),
+              },
+            ],
+          },
         ],
-      },
-      {
-        kind: 'table',
-        title: '板面任务（pending / claimed）',
-        columns: [
-          { key: 'id', label: 'id' },
-          { key: 'title', label: '标题' },
-          { key: 'priority', label: '优先级' },
-          { key: 'status', label: '状态' },
-          { key: 'assignee', label: '负责人' },
-          { key: 'updatedAt', label: '更新' },
-        ],
-        rows: tasks.map((t) => ({
-          id: t.id ?? '—',
-          title: (t.title ?? '（无标题）').slice(0, 90),
-          priority: t.priority ?? 'normal',
-          status: t.status ?? '—',
-          assignee: t.assignee ?? '—',
-          updatedAt: (t.updatedAt ?? t.createdAt ?? '—').slice(0, 16).replace('T', ' '),
-        })),
-      },
-      {
-        kind: 'actions',
-        title: '动作',
-        items: actionItems(taskboardActions(deps)),
-      },
-      {
-        kind: 'text',
-        title: '归档与来源',
-        lines,
       },
     ],
   }
@@ -490,7 +578,8 @@ export function createTaskboardPanel(deps: TaskboardDeps): PanelContribution {
     title: '任务板',
     order: 20,
     icon: 'check',
-    description: '任务板板面与流转：计数、清单、新建/认领/完成、终态归档（写入 archive/terminal-<日期>.json）',
+    description: '任务板板面与流转：计数、分布图、新建/认领/完成、终态归档（写入 archive/terminal-<日期>.json）',
+    style: { accent: '#f0b429', density: 'compact' },
     view: () => toTaskboardSpec(deps),
     actions: taskboardActions(deps),
   }

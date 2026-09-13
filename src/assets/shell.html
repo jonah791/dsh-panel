@@ -41,17 +41,72 @@
   ============================================================================
 -->
 <style>
+/* 设计令牌（v0.5 皮肤层）：面板脱离官方 Web 皮肤约束后的第一层自由——
+   所有颜色/圆角/间距/字体都过令牌，换主题只换令牌，不改结构。 */
 :root{
   --bg:#14161a;
   --fg:#e6e6e6;
   --card:#1d2026;
   --border:#2b2f36;
+  --topbar:#171a1f;
+  --nav-bg:#171a1f;
+  --sunken:#1a1d22;
+  --btn:#23272e;
+  --btn-hover:#2c313a;
+  --btn-hover-border:#3a404a;
   --accent:#6ea8fe;
   --ok:#4ade80;
   --warn:#fbbf24;
   --bad:#f87171;
   --muted:#8b949e;
   --dur:120ms;
+  --radius:8px;
+  --radius-sm:6px;
+  --gap:12px;
+  --font-ui:ui-sans-serif,system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
+  --font-mono:ui-monospace,Consolas,"Cascadia Mono",monospace;
+}
+/* 皮肤·终端：高对比、零圆角、等宽——为"日志/仪表"型面板准备 */
+[data-theme="terminal"]{
+  --bg:#060809;
+  --fg:#c9ffd6;
+  --card:#0a1011;
+  --border:#1c2c24;
+  --topbar:#040606;
+  --nav-bg:#040606;
+  --sunken:#0a0f0e;
+  --btn:#0c1512;
+  --btn-hover:#122019;
+  --btn-hover-border:#2b4a37;
+  --accent:#3ddc84;
+  --ok:#3ddc84;
+  --warn:#ffd23f;
+  --bad:#ff5f56;
+  --muted:#6f8f7d;
+  --dur:60ms;
+  --radius:0px;
+  --radius-sm:0px;
+  --font-ui:ui-monospace,Consolas,"Cascadia Mono",monospace;
+}
+/* 皮肤·纸质：浅色阅读型——为"文档/档案/长表格"型面板准备 */
+[data-theme="paper"]{
+  --bg:#f6f5f2;
+  --fg:#22252a;
+  --card:#ffffff;
+  --border:#e3dfd7;
+  --topbar:#ffffff;
+  --nav-bg:#fbfaf8;
+  --sunken:#f7f6f3;
+  --btn:#f1efe9;
+  --btn-hover:#e7e3da;
+  --btn-hover-border:#d5cfc4;
+  --accent:#2f6fed;
+  --ok:#1f9d55;
+  --warn:#b7791f;
+  --bad:#d64545;
+  --muted:#6b6f76;
+  --radius:10px;
+  --radius-sm:8px;
 }
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -59,14 +114,14 @@ body{
   margin:0;
   background:var(--bg);
   color:var(--fg);
-  font-family:ui-sans-serif,system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
+  font-family:var(--font-ui);
   font-size:14px;
   line-height:1.5;
   display:flex;
   flex-direction:column;
 }
 button,input{font:inherit}
-.mono{font-family:ui-monospace,Consolas,monospace}
+.mono{font-family:var(--font-mono)}
 
 /* 顶栏 --------------------------------------------------------------- */
 .topbar{
@@ -75,7 +130,7 @@ button,input{font:inherit}
   align-items:center;
   gap:12px;
   padding:10px 16px;
-  background:#171a1f;
+  background:var(--topbar);
   border-bottom:1px solid var(--border);
 }
 .brand{display:flex; align-items:baseline; gap:8px; min-width:0}
@@ -87,16 +142,16 @@ button,input{font:inherit}
 
 /* 按钮 --------------------------------------------------------------- */
 .btn{
-  background:#23272e;
+  background:var(--btn);
   color:var(--fg);
   border:1px solid var(--border);
-  border-radius:6px;
+  border-radius:var(--radius-sm);
   padding:4px 10px;
   font-size:12px;
   cursor:pointer;
   transition:background var(--dur), border-color var(--dur), color var(--dur);
 }
-.btn:hover:not(:disabled){background:#2c313a; border-color:#3a404a}
+.btn:hover:not(:disabled){background:var(--btn-hover); border-color:var(--btn-hover-border)}
 .btn:disabled{opacity:.45; cursor:not-allowed}
 .btn.small{padding:2px 8px}
 .btn.read{color:var(--accent); border-color:#2f4a72}
@@ -125,7 +180,7 @@ button,input{font:inherit}
 .nav{
   width:200px;
   flex:0 0 200px;
-  background:#171a1f;
+  background:var(--nav-bg);
   border-right:1px solid var(--border);
   display:flex;
   flex-direction:column;
@@ -144,8 +199,8 @@ button,input{font:inherit}
   font-size:13px;
   transition:background var(--dur), color var(--dur);
 }
-.nav-item:hover{background:#22262d}
-.nav-item.active{background:#243044; color:#cfe1ff}
+.nav-item:hover{background:var(--btn-hover)}
+.nav-item.active{background:var(--btn-hover); color:var(--accent)}
 .nav-title{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .nav-empty{padding:6px 8px 8px; color:var(--muted); font-size:12px; display:flex; flex-direction:column; gap:6px; align-items:flex-start}
 .dot{flex:0 0 auto; width:8px; height:8px; border-radius:50%; background:var(--muted)}
@@ -162,7 +217,7 @@ button,input{font:inherit}
 .dur.slow{color:var(--warn)}
 
 /* 块 ---------------------------------------------------------------- */
-.block{background:var(--card); border:1px solid var(--border); border-radius:8px; margin-bottom:12px}
+.block{background:var(--card); border:1px solid var(--border); border-radius:var(--radius); margin-bottom:12px}
 .block:last-child{margin-bottom:0}
 .block-head{padding:8px 12px; border-bottom:1px solid var(--border); font-size:12px; color:var(--muted)}
 .block-body{padding:12px}
@@ -170,7 +225,7 @@ button,input{font:inherit}
 
 /* metrics ----------------------------------------------------------- */
 .metrics{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px}
-.metric{background:#1a1d22; border:1px solid var(--border); border-radius:6px; padding:8px 10px}
+.metric{background:var(--sunken); border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 10px}
 .metric-value{font-size:18px; font-weight:600; font-family:ui-monospace,Consolas,monospace; overflow-wrap:anywhere}
 .metric-label{font-size:12px; color:var(--muted); margin-top:2px}
 .metric-hint{font-size:11px; color:var(--muted); margin-top:2px}
@@ -187,21 +242,21 @@ thead th{
   position:sticky;
   top:0;
   z-index:1;
-  background:#20242b;
+  background:var(--sunken);
   color:var(--muted);
   font-weight:600;
   white-space:nowrap;
 }
 th.right,td.right{text-align:right}
 tbody tr{transition:background var(--dur)}
-tbody tr:hover{background:#22262d}
+tbody tr:hover{background:var(--btn-hover)}
 td .cell{display:block; max-width:340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 td.actions-cell{text-align:right; white-space:nowrap}
 td.actions-cell .btn{margin-left:6px}
 
 /* list -------------------------------------------------------------- */
 .list{display:flex; flex-direction:column; gap:8px}
-.list-item{background:#1a1d22; border:1px solid var(--border); border-left:3px solid var(--border); border-radius:6px; padding:8px 10px}
+.list-item{background:var(--sunken); border:1px solid var(--border); border-left:3px solid var(--border); border-radius:var(--radius-sm); padding:8px 10px}
 .list-item.tone-ok{border-left-color:var(--ok)}
 .list-item.tone-warn{border-left-color:var(--warn)}
 .list-item.tone-bad{border-left-color:var(--bad)}
@@ -209,7 +264,7 @@ td.actions-cell .btn{margin-left:6px}
 .list-title{font-size:13px; font-weight:600; overflow-wrap:anywhere}
 .list-sub{font-size:12px; color:var(--muted); margin-top:2px; overflow-wrap:anywhere}
 .tags{display:flex; flex-wrap:wrap; gap:6px; margin-top:6px}
-.tag{font-size:11px; color:var(--muted); background:#23272e; border:1px solid var(--border); border-radius:999px; padding:1px 8px}
+.tag{font-size:11px; color:var(--muted); background:var(--btn); border:1px solid var(--border); border-radius:999px; padding:1px 8px}
 
 /* kv ---------------------------------------------------------------- */
 .kv{display:grid; grid-template-columns:minmax(110px,max-content) 1fr; gap:6px 14px}
@@ -242,7 +297,7 @@ td.actions-cell .btn{margin-left:6px}
 .unknown-hint{color:var(--muted); font-size:12px; margin-top:4px}
 
 /* 降级态 ------------------------------------------------------------- */
-.degraded{background:var(--card); border:1px solid #5a3134; border-radius:8px; padding:14px}
+.degraded{background:var(--card); border:1px solid var(--bad); border-radius:var(--radius); padding:14px}
 .degraded-title{color:var(--warn); font-weight:600; margin-bottom:6px}
 .degraded-msg{
   margin-bottom:10px;
@@ -252,6 +307,80 @@ td.actions-cell .btn{margin-left:6px}
 }
 
 /* 窄屏：导航折叠为顶部横向滚动条 ------------------------------------- */
+/* ---------------------------------------------------------------------
+   表现力扩展块（v0.5）：form / chart / log / progress / tabs
+   全部零依赖（无框架、无 CDN、无外部字体），颜色一律过设计令牌。
+   --------------------------------------------------------------------- */
+.form-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px 14px}
+.field{display:flex; flex-direction:column; gap:4px; min-width:0}
+.field-label{font-size:12px; color:var(--muted)}
+.field input[type=text],.field input[type=number],.field textarea,.field select{
+  background:var(--sunken);
+  color:var(--fg);
+  border:1px solid var(--border);
+  border-radius:var(--radius-sm);
+  padding:5px 8px;
+  font-size:13px;
+  font-family:inherit;
+  width:100%;
+}
+.field input:focus,.field textarea:focus,.field select:focus{outline:1px solid var(--accent); border-color:var(--accent)}
+.field textarea{min-height:64px; resize:vertical}
+.field-hint{font-size:11px; color:var(--muted)}
+.field.wide{grid-column:1 / -1}
+.field.check{flex-direction:row; align-items:center; gap:8px}
+.field.check input{accent-color:var(--accent); width:auto}
+.form-foot{display:flex; align-items:center; gap:10px; margin-top:12px; flex-wrap:wrap}
+.form-note{font-size:11px; color:var(--muted)}
+
+.chart{display:flex; gap:18px; flex-wrap:wrap; align-items:center}
+.chart-legend{display:flex; flex-direction:column; gap:5px; font-size:12px; min-width:120px}
+.chart-legend .lg{display:flex; align-items:center; gap:6px}
+.chart-legend .dot{width:9px; height:9px; border-radius:2px; flex:0 0 auto}
+.chart-legend .val{margin-left:auto; color:var(--muted); font-family:var(--font-mono); font-size:11px}
+.chart svg{display:block}
+
+.log{background:var(--sunken); border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:8px 10px; font-family:var(--font-mono); font-size:12px; max-height:340px; overflow:auto}
+.log-line{display:flex; gap:8px; padding:1px 0; white-space:pre-wrap; overflow-wrap:anywhere}
+.log-at{color:var(--muted); flex:0 0 auto}
+.log-lv{flex:0 0 auto; font-size:10px; text-transform:uppercase; padding:0 4px; border-radius:2px;
+  border:1px solid var(--border); color:var(--muted)}
+.log-text{flex:1 1 auto}
+.log-line.lv-ok .log-lv{color:var(--ok); border-color:var(--ok)}
+.log-line.lv-warn .log-lv{color:var(--warn); border-color:var(--warn)}
+.log-line.lv-error .log-lv{color:var(--bad); border-color:var(--bad)}
+.log-line.lv-error .log-text{color:var(--bad)}
+.log-line.lv-debug .log-text{color:var(--muted)}
+
+.progress-list{display:flex; flex-direction:column; gap:10px}
+.progress-row{display:flex; flex-direction:column; gap:4px}
+.progress-head{display:flex; justify-content:space-between; gap:8px; font-size:12px}
+.progress-head .pv{font-family:var(--font-mono); color:var(--muted); font-size:11px}
+.progress-track{height:8px; background:var(--border); border-radius:999px; overflow:hidden}
+.progress-fill{height:100%; background:var(--accent); border-radius:999px}
+.progress-fill.tone-ok{background:var(--ok)}
+.progress-fill.tone-warn{background:var(--warn)}
+.progress-fill.tone-bad{background:var(--bad)}
+.progress-fill.tone-muted{background:var(--muted)}
+
+.tabs-bar{display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;
+  border-bottom:1px solid var(--border); padding-bottom:6px}
+.tab-btn{background:transparent; color:var(--muted); border:1px solid transparent;
+  border-radius:var(--radius-sm); padding:3px 9px; font-size:12px; cursor:pointer}
+.tab-btn:hover{color:var(--fg)}
+.tab-btn.active{color:var(--fg); background:var(--btn); border-color:var(--border)}
+.tab-badge{font-family:var(--font-mono); font-size:10px; color:var(--muted); margin-left:4px}
+
+.theme-select{background:var(--btn); color:var(--fg); border:1px solid var(--border);
+  border-radius:var(--radius-sm); padding:3px 6px; font-size:12px; cursor:pointer}
+
+/* 面板自带密度（PanelStyle.density=compact）：信息密集型面板自报紧凑 */
+[data-density="compact"] .block-body{padding:8px 10px}
+[data-density="compact"] .block-head{padding:5px 10px}
+[data-density="compact"] .block{margin-bottom:8px}
+[data-density="compact"] .metrics{gap:6px}
+
 @media (max-width:720px){
   .layout{flex-direction:column}
   .nav{
@@ -287,6 +416,14 @@ td.actions-cell .btn{margin-left:6px}
     <span class="brand-ver" id="hostVersion">宿主版本 —</span>
   </div>
   <div class="topbar-actions">
+    <label class="switch" title="面板皮肤（仅外壳外观，契约不变；本机记忆，可用 ?theme= 覆盖）">
+      <span>皮肤</span>
+      <select class="theme-select" id="themeSelect">
+        <option value="ink">墨青</option>
+        <option value="terminal">终端</option>
+        <option value="paper">纸质</option>
+      </select>
+    </label>
     <label class="switch" title="页面可见时每 5 秒自动刷新当前面板；页面切到后台时停止">
       <input type="checkbox" id="autoRefresh" checked>
       <span>自动刷新</span>
@@ -327,6 +464,12 @@ td.actions-cell .btn{margin-left:6px}
   var HEALTH_TEXT = { ok: '健康', degraded: '降级', down: '不可用', unknown: '未知' };
   var LEVEL_TEXT = { read: '只读', write: '写入', destructive: '破坏性' };
 
+  // 皮肤（设计自由层）：主题令牌切换 + 本机记忆 + URL 覆盖。
+  // 纪律：主题只改 --token，不改 DOM 结构，也不参与契约——面板看不懂主题，宿主负责外观。
+  var THEME_KEY = 'dsh-panel/theme';
+  var THEMES = ['ink', 'terminal', 'paper'];
+  var DEFAULT_THEME = 'ink';
+
   /* ==================================================================
      状态
      ================================================================== */
@@ -337,10 +480,76 @@ td.actions-cell .btn{margin-left:6px}
     currentId: null,
     autoRefresh: true,
     inflight: false,    // 同一时刻只允许一个视图请求在飞，防轮询堆叠
-    pendingId: null     // 在飞期间被挡下的目标面板：请求结束后补发，避免切面板被吞
+    pendingId: null,    // 在飞期间被挡下的目标面板：请求结束后补发，避免切面板被吞
+    // 重渲染不该带走用户正在做的事：标签页选择与表单草稿按 (面板/块) 记忆，
+    // 每次自动刷新重建 DOM 后原样恢复（v0.5 观感复核发现：5 秒轮询会把页面弹回第一页、
+    // 把输入到一半的表单清空——那是"刷新"变成了"抢用户的手"）。
+    tabs: {},           // key: panelId|tabs|label1,label2… → 选中下标
+    drafts: {}          // key: panelId|actionId → { 字段名: 值 }
   };
   var tickTimer = null;
   var dom = {};
+
+  /* ==================================================================
+     皮肤与面板自带视觉
+     ================================================================== */
+
+  function normalizeTheme(value) {
+    var v = (value === undefined || value === null) ? '' : String(value);
+    return THEMES.indexOf(v) >= 0 ? v : null;
+  }
+
+  // 优先级：URL ?theme= > 本机记忆 > 默认。URL 优先是为了「可分享的链接」。
+  function resolveTheme() {
+    var fromUrl = null;
+    try {
+      fromUrl = normalizeTheme(new URLSearchParams(String(window.location.search || '')).get('theme'));
+    } catch (e) {
+      fromUrl = null;
+    }
+    if (fromUrl !== null) return fromUrl;
+    var saved = null;
+    try {
+      saved = normalizeTheme(window.localStorage.getItem(THEME_KEY));
+    } catch (e) {
+      saved = null;   // 隐私模式：读不到就回默认，不报错也不静默改主题
+    }
+    return saved !== null ? saved : DEFAULT_THEME;
+  }
+
+  function applyTheme(theme, persist) {
+    var t = normalizeTheme(theme);
+    if (t === null) t = DEFAULT_THEME;
+    document.documentElement.setAttribute('data-theme', t);
+    if (dom.themeSelect) dom.themeSelect.value = t;
+    if (persist === true) {
+      try { window.localStorage.setItem(THEME_KEY, t); } catch (e) { /* 存不下就算了 */ }
+    }
+    return t;
+  }
+
+  function panelMetaOf(panelId) {
+    if (!hasText(panelId)) return null;
+    for (var i = 0; i < state.panels.length; i++) {
+      if (state.panels[i] && state.panels[i].id === panelId) return state.panels[i];
+    }
+    return null;
+  }
+
+  // 面板自带视觉：accent 只接受颜色字面量（宿主注册时已校验，这里再验一次——
+  // 两端都验不是重复，是"渲染层不信任输入"的同一条纪律）。
+  function applyPanelStyle(panelId) {
+    if (!dom.content) return;
+    dom.content.removeAttribute('data-density');
+    dom.content.style.removeProperty('--accent');
+    var meta = panelMetaOf(panelId);
+    var style = (meta && meta.style && typeof meta.style === 'object') ? meta.style : null;
+    if (!style) return;
+    if (style.density === 'compact') dom.content.setAttribute('data-density', 'compact');
+    if (hasText(style.accent) && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(String(style.accent))) {
+      dom.content.style.setProperty('--accent', String(style.accent));
+    }
+  }
 
   /* ==================================================================
      基础工具
@@ -549,6 +758,11 @@ td.actions-cell .btn{margin-left:6px}
         case 'text': node = renderBlockText(block); break;
         case 'timeline': node = renderBlockTimeline(block); break;
         case 'actions': node = renderBlockActions(block, ctx); break;
+        case 'form': node = renderBlockForm(block, ctx); break;
+        case 'chart': node = renderBlockChart(block); break;
+        case 'log': node = renderBlockLog(block); break;
+        case 'progress': node = renderBlockProgress(block); break;
+        case 'tabs': node = renderBlockTabs(block, ctx); break;
         default: node = renderBlockUnknown(kind, block); break;
       }
       if (node) frag.appendChild(node);
@@ -752,6 +966,371 @@ td.actions-cell .btn{margin-left:6px}
     return shell.wrap;
   }
 
+  /* ==================================================================
+     表现力扩展块（v0.5）：form / chart / log / progress / tabs
+     全部零依赖（无框架 / 无 CDN / 无外部字体）；所有动态文本走 textContent。
+     ================================================================== */
+
+  var LOG_LEVELS = { info: 1, ok: 1, warn: 1, error: 1, debug: 1 };
+
+  // 渲染层不信任输入：NaN / Infinity / 非数值一律回落默认值
+  function numOr(value, fallback) {
+    var n = (typeof value === 'number') ? value : Number(value);
+    return isFinite(n) ? n : fallback;
+  }
+
+  function toneKey(tone) {
+    var t = hasText(tone) ? String(tone) : '';
+    return (t === 'ok' || t === 'warn' || t === 'bad' || t === 'muted') ? t : 'muted';
+  }
+
+  function toneColor(tone) {
+    return 'var(--' + toneKey(tone) + ')';
+  }
+
+  function svgNode(tag, attrs) {
+    var node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    if (attrs) {
+      var keys = Object.keys(attrs);
+      for (var i = 0; i < keys.length; i++) node.setAttribute(keys[i], String(attrs[keys[i]]));
+    }
+    return node;
+  }
+
+  function fmtChartValue(value, unit) {
+    var rounded = Math.round(value * 100) / 100;
+    return String(rounded) + (unit ? String(unit) : '');
+  }
+
+  // 表单：字段 → 参数，提交走与按钮**同一条**派发路径（分级/审批门/确认门完全一致）。
+  // 元信息缺失时保守按 write 处理——绝不把来源不明的动作当只读放行。
+  function renderBlockForm(block, ctx) {
+    var shell = blockShell(block.title);
+    var actionId = hasText(block.actionId) ? String(block.actionId) : '';
+    var fields = Array.isArray(block.fields) ? block.fields : [];
+    var meta = lookupAction(actionId, ctx);
+    var level = (meta && hasText(meta.level)) ? String(meta.level) : 'write';
+    var label = hasText(block.submitLabel)
+      ? String(block.submitLabel)
+      : ((meta && hasText(meta.label)) ? String(meta.label) : (actionId || '提交'));
+
+    var grid = el('div', 'form-grid');
+    var readers = [];
+
+    for (var i = 0; i < fields.length; i++) {
+      var f = fields[i];
+      if (!f || typeof f !== 'object' || !hasText(f.name)) continue;
+      var name = String(f.name);
+      var type = hasText(f.type) ? String(f.type) : 'text';
+      var wide = f.wide === true || type === 'textarea';
+      var wrap = el('div', 'field' + (wide ? ' wide' : '') + (type === 'checkbox' ? ' check' : ''));
+      var input;
+
+      if (type === 'textarea') {
+        input = el('textarea');
+        if (hasText(f.placeholder)) input.placeholder = String(f.placeholder);
+      } else if (type === 'select') {
+        input = el('select');
+        var options = Array.isArray(f.options) ? f.options : [];
+        for (var o = 0; o < options.length; o++) {
+          var rawOpt = options[o];
+          var value = (rawOpt && typeof rawOpt === 'object')
+            ? String(rawOpt.value === undefined ? '' : rawOpt.value)
+            : String(rawOpt);
+          var optLabel = (rawOpt && typeof rawOpt === 'object' && hasText(rawOpt.label)) ? String(rawOpt.label) : value;
+          var option = el('option', null, optLabel);
+          option.value = value;
+          input.appendChild(option);
+        }
+      } else {
+        input = el('input');
+        input.type = (type === 'number') ? 'number' : ((type === 'checkbox') ? 'checkbox' : 'text');
+        if (type !== 'checkbox' && hasText(f.placeholder)) input.placeholder = String(f.placeholder);
+      }
+      input.name = name;
+
+      // 草稿记忆：自动刷新会重建整个面板 DOM——若不恢复，用户输到一半的内容会凭空消失。
+      var draftKey = String(ctx.panelId) + '|' + actionId;
+      var savedDraft = state.drafts[draftKey];
+      if (savedDraft && Object.prototype.hasOwnProperty.call(savedDraft, name)) {
+        if (type === 'checkbox') input.checked = savedDraft[name] === true;
+        else input.value = String(savedDraft[name]);
+      }
+      (function (fieldName, fieldType, node) {
+        node.addEventListener(fieldType === 'checkbox' ? 'change' : 'input', function () {
+          var store = state.drafts[draftKey] || (state.drafts[draftKey] = {});
+          store[fieldName] = (fieldType === 'checkbox')
+            ? (node.checked === true)
+            : String(node.value === undefined ? '' : node.value);
+        });
+      })(name, type, input);
+
+      if (type === 'checkbox') {
+        wrap.appendChild(input);
+        wrap.appendChild(el('span', 'field-label', String(f.label)));
+      } else {
+        wrap.appendChild(el('div', 'field-label', String(f.label) + (f.required === true ? ' *' : '')));
+        wrap.appendChild(input);
+      }
+      if (hasText(f.hint)) wrap.appendChild(el('div', 'field-hint', String(f.hint)));
+      grid.appendChild(wrap);
+      readers.push({ name: name, type: type, node: input });
+    }
+
+    if (grid.childNodes.length === 0) shell.body.appendChild(emptyState('表单没有可用字段'));
+    else shell.body.appendChild(grid);
+
+    var foot = el('div', 'form-foot');
+    var submit = el('button', 'btn ' + levelClass(level), label);
+    submit.type = 'button';
+    if (actionId === '') {
+      submit.disabled = true;
+      submit.title = '表单缺少 actionId，无法派发';
+    } else if (meta === null) {
+      submit.title = '动作元信息缺失（actions 块未声明该动作），按保守级别 ' + level + ' 派发';
+    } else {
+      submit.title = levelLabel(level) + '动作：' + actionId;
+    }
+    submit.addEventListener('click', function () {
+      var params = {};
+      for (var k = 0; k < readers.length; k++) {
+        var reader = readers[k];
+        if (reader.type === 'checkbox') { params[reader.name] = reader.node.checked === true; continue; }
+        if (reader.type === 'number') {
+          var rawNum = String(reader.node.value === undefined ? '' : reader.node.value).trim();
+          if (rawNum !== '' && isFinite(Number(rawNum))) params[reader.name] = Number(rawNum);
+          continue;
+        }
+        params[reader.name] = String(reader.node.value === undefined ? '' : reader.node.value);
+      }
+      // 成功才丢弃草稿；失败保留（用户改一改就能重试，不用重打一遍）
+      dispatchAction(ctx.panelId, actionId, label, level, ctx.panelTitle, params).then(function (okFlag) {
+        if (okFlag === true) delete state.drafts[draftKey];
+      }).catch(function () {
+        // 派发失败已在横幅显示；这里只负责保住草稿
+      });
+    });
+    foot.appendChild(submit);
+    if (hasText(block.note)) foot.appendChild(el('span', 'form-note', String(block.note)));
+    shell.body.appendChild(foot);
+    return shell.wrap;
+  }
+
+  function buildBars(series, max, height) {
+    var barW = 28, gap = 14;
+    var width = series.length * (barW + gap) + gap;
+    var svg = svgNode('svg', { width: width, height: height, viewBox: '0 0 ' + width + ' ' + height, role: 'img' });
+    for (var i = 0; i < series.length; i++) {
+      var item = series[i] || {};
+      var value = Math.abs(numOr(item.value, 0));
+      // 零值不画柱：2px 的残条会被读成"有个很小的值"，是视觉噪音（图例里仍显示 0）
+      if (value <= 0) continue;
+      var h = Math.max(3, Math.round((value / max) * (height - 10)));
+      var rect = svgNode('rect', { x: gap + i * (barW + gap), y: height - 5 - h, width: barW, height: h, rx: 2 });
+      rect.style.fill = toneColor(item.tone);
+      svg.appendChild(rect);
+    }
+    return svg;
+  }
+
+  function buildLine(series, max, height) {
+    var stepX = 34, pad = 6;
+    var width = Math.max(120, series.length * stepX + pad * 2);
+    var svg = svgNode('svg', { width: width, height: height, viewBox: '0 0 ' + width + ' ' + height, role: 'img' });
+    var points = [];
+    for (var i = 0; i < series.length; i++) {
+      var value = Math.abs(numOr((series[i] || {}).value, 0));
+      var x = pad + i * stepX + stepX / 2;
+      var y = height - pad - Math.round((value / max) * (height - pad * 2));
+      points.push(x + ',' + y);
+    }
+    var poly = svgNode('polyline', { points: points.join(' '), fill: 'none' });
+    poly.style.stroke = 'var(--accent)';
+    poly.style.strokeWidth = '2';
+    svg.appendChild(poly);
+    return svg;
+  }
+
+  function buildDonut(series, height) {
+    var size = Math.max(90, Math.min(height, 220));
+    var radius = size / 2 - 9;
+    var center = size / 2;
+    var total = 0;
+    for (var i = 0; i < series.length; i++) total += Math.abs(numOr((series[i] || {}).value, 0));
+
+    var svg = svgNode('svg', { width: size, height: size, viewBox: '0 0 ' + size + ' ' + size, role: 'img' });
+    var track = svgNode('circle', { cx: center, cy: center, r: radius, fill: 'none' });
+    track.style.stroke = 'var(--border)';
+    track.style.strokeWidth = '10';
+    svg.appendChild(track);
+    if (total <= 0) return svg;
+
+    var circumference = 2 * Math.PI * radius;
+    var offset = 0;
+    for (var j = 0; j < series.length; j++) {
+      var item = series[j] || {};
+      var value = Math.abs(numOr(item.value, 0));
+      if (value <= 0) continue;
+      var len = (value / total) * circumference;
+      var arc = svgNode('circle', { cx: center, cy: center, r: radius, fill: 'none' });
+      arc.style.stroke = toneColor(item.tone);
+      arc.style.strokeWidth = '10';
+      arc.style.strokeDasharray = len + ' ' + (circumference - len);
+      arc.style.strokeDashoffset = String(-offset);
+      arc.setAttribute('transform', 'rotate(-90 ' + center + ' ' + center + ')');
+      svg.appendChild(arc);
+      offset += len;
+    }
+    return svg;
+  }
+
+  function renderBlockChart(block) {
+    var shell = blockShell(block.title);
+    var series = Array.isArray(block.series) ? block.series : [];
+    if (series.length === 0) {
+      shell.body.appendChild(emptyState('该图暂无数据'));
+      return shell.wrap;
+    }
+    var chart = hasText(block.chart) ? String(block.chart) : 'bar';
+    var unit = hasText(block.unit) ? String(block.unit) : '';
+    var height = Math.max(60, Math.min(400, numOr(block.height, 160)));
+    var max = 0;
+    for (var i = 0; i < series.length; i++) max = Math.max(max, Math.abs(numOr((series[i] || {}).value, 0)));
+    if (max <= 0) max = 1;
+
+    var wrap = el('div', 'chart');
+    if (chart === 'donut') wrap.appendChild(buildDonut(series, height));
+    else if (chart === 'line') wrap.appendChild(buildLine(series, max, height));
+    else wrap.appendChild(buildBars(series, max, height));
+
+    var legend = el('div', 'chart-legend');
+    for (var j = 0; j < series.length; j++) {
+      var item = series[j] || {};
+      var row = el('div', 'lg');
+      var dot = el('span', 'dot');
+      dot.style.background = toneColor(item.tone);
+      row.appendChild(dot);
+      row.appendChild(el('span', null, text(item.label, '—')));
+      row.appendChild(el('span', 'val', fmtChartValue(numOr(item.value, 0), unit)));
+      legend.appendChild(row);
+    }
+    wrap.appendChild(legend);
+    shell.body.appendChild(wrap);
+    return shell.wrap;
+  }
+
+  function renderBlockLog(block) {
+    var shell = blockShell(block.title);
+    var lines = Array.isArray(block.lines) ? block.lines : [];
+    if (lines.length === 0) {
+      shell.body.appendChild(emptyState('日志为空'));
+      return shell.wrap;
+    }
+    var box = el('div', 'log');
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (line === null || typeof line !== 'object') continue;
+      var rawLevel = hasText(line.level) ? String(line.level) : 'info';
+      var level = LOG_LEVELS[rawLevel] === 1 ? rawLevel : 'info';   // 类别名白名单：不接受任意字符串进 class
+      var row = el('div', 'log-line lv-' + level);
+      if (hasText(line.at)) row.appendChild(el('span', 'log-at', String(line.at)));
+      row.appendChild(el('span', 'log-lv', level));
+      row.appendChild(el('span', 'log-text', text(line.text, '')));
+      box.appendChild(row);
+    }
+    shell.body.appendChild(box);
+    return shell.wrap;
+  }
+
+  function renderBlockProgress(block) {
+    var shell = blockShell(block.title);
+    var items = Array.isArray(block.items) ? block.items : [];
+    if (items.length === 0) {
+      shell.body.appendChild(emptyState());
+      return shell.wrap;
+    }
+    var list = el('div', 'progress-list');
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      if (item === null || typeof item !== 'object') continue;
+      var value = numOr(item.value, 0);
+      var max = numOr(item.max, 100);
+      if (max <= 0) max = 100;
+      var ratio = Math.max(0, Math.min(1, value / max));   // 渲染层夹取值域，不信任输入
+
+      var row = el('div', 'progress-row');
+      var head = el('div', 'progress-head');
+      head.appendChild(el('span', null, text(item.label, '—')));
+      var shown = (Math.round(value * 100) / 100) + ' / ' + (Math.round(max * 100) / 100)
+        + (hasText(item.hint) ? ' · ' + String(item.hint) : '');
+      head.appendChild(el('span', 'pv', shown));
+      row.appendChild(head);
+
+      var track = el('div', 'progress-track');
+      var fill = el('div', 'progress-fill' + (hasText(item.tone) ? ' tone-' + toneKey(item.tone) : ''));
+      fill.style.width = Math.round(ratio * 100) + '%';
+      track.appendChild(fill);
+      row.appendChild(track);
+      list.appendChild(row);
+    }
+    shell.body.appendChild(list);
+    return shell.wrap;
+  }
+
+  function renderBlockTabs(block, ctx) {
+    var shell = blockShell(block.title);
+    shell.wrap.classList.add('tabs');
+    var items = Array.isArray(block.items) ? block.items : [];
+    if (items.length === 0) {
+      shell.body.appendChild(emptyState());
+      return shell.wrap;
+    }
+    // 记忆键：面板 + 标签文案集合（刷新后同一组标签 → 恢复用户选中的那一页）
+    var tabsKey = String(ctx.panelId) + '|tabs|' + items.map(function (item) {
+      return text(item && item.label, '');
+    }).join(',');
+
+    var bar = el('div', 'tabs-bar');
+    var pane = el('div', 'tabs-pane');
+    var buttons = [];
+    var panes = [];
+
+    function show(index) {
+      for (var i = 0; i < buttons.length; i++) {
+        if (i === index) buttons[i].classList.add('active');
+        else buttons[i].classList.remove('active');
+        panes[i].hidden = (i !== index);
+      }
+      state.tabs[tabsKey] = index;
+    }
+
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      if (item === null || typeof item !== 'object') continue;
+      var btn = el('button', 'tab-btn', text(item.label, '—'));
+      btn.type = 'button';
+      if (hasText(item.badge)) btn.appendChild(el('span', 'tab-badge', String(item.badge)));
+      var node = el('div', 'tab-pane');
+      node.appendChild(renderBlocks(Array.isArray(item.blocks) ? item.blocks : [], ctx));
+      // 闭包纪律：循环变量的绑定必须当场固定，否则所有按钮都指向最后一页
+      (function (index) {
+        btn.addEventListener('click', function () { show(index); });
+      })(buttons.length);
+      buttons.push(btn);
+      panes.push(node);
+      bar.appendChild(btn);
+      pane.appendChild(node);
+    }
+    shell.body.appendChild(bar);
+    shell.body.appendChild(pane);
+    if (buttons.length > 0) {
+      var remembered = state.tabs[tabsKey];
+      var initial = (typeof remembered === 'number' && remembered >= 0 && remembered < buttons.length) ? remembered : 0;
+      show(initial);
+    }
+    return shell.wrap;
+  }
+
   // 未知块：白名单外的类型必须给出可读提示，且绝不能拖垮整页。
   // 这里是全文件唯一使用 innerHTML 的位置——骨架是固定字面量，唯一的动态值
   // （kind）经 escape 后才拼入。
@@ -780,7 +1359,16 @@ td.actions-cell .btn{margin-left:6px}
       if (block.kind === 'actions' && Array.isArray(block.items)) {
         for (var j = 0; j < block.items.length; j++) acc.push(block.items[j]);
       }
+      // 注意：表单**不往动作索引里塞自己**。表单只知道 actionId，不知道 level；
+      // 若在这里登记，会用默认 level 覆盖 actions 块里更精确的分级 → 破坏性动作
+      // 可能因此跳过二次确认。渲染表单时对缺失元信息的动作保守按 'write' 处理。
       if (block.kind === 'sections') collectActionItems(block.blocks, acc);
+      if (block.kind === 'tabs' && Array.isArray(block.items)) {
+        for (var t = 0; t < block.items.length; t++) {
+          var tab = block.items[t];
+          if (tab && typeof tab === 'object') collectActionItems(tab.blocks, acc);
+        }
+      }
     }
     return acc;
   }
@@ -859,7 +1447,7 @@ td.actions-cell .btn{margin-left:6px}
 
   // 派发：destructive 先二次确认（确认后才带 confirm:true），read/write 直接 POST；
   // 无论成败都立刻刷新当前面板（结果条显示返回值，视图显示副作用后的真相）。
-  async function dispatchAction(panelId, actionId, label, level, panelTitle) {
+  async function dispatchAction(panelId, actionId, label, level, panelTitle, params) {
     if (!hasText(panelId) || !hasText(actionId)) {
       setBanner('result', 'bad', '动作派发失败：缺少 panelId 或 actionId');
       return;
@@ -882,17 +1470,19 @@ td.actions-cell .btn{margin-left:6px}
 
     setBanner('result', 'muted', '正在执行：' + label + ' …');
 
+    var okFlag = false;
     try {
       var data = await api('/api/panel/action', {
         method: 'POST',
         body: {
           panelId: String(panelId),
           actionId: String(actionId),
-          params: {},
+          params: (params && typeof params === 'object') ? params : {},
           confirm: confirmed
         }
       });
       if (data && data.ok === true) {
+        okFlag = true;
         setBanner('result', 'ok', '「' + label + '」' + text(data.message, '执行成功'));
       } else {
         setBanner('result', 'bad', '「' + label + '」失败：' + text(data && data.error, '宿主未返回错误详情'));
@@ -902,6 +1492,7 @@ td.actions-cell .btn{margin-left:6px}
     }
 
     await refreshCurrent();
+    return okFlag;
   }
 
   /* ==================================================================
@@ -972,6 +1563,9 @@ td.actions-cell .btn{margin-left:6px}
       for (var i = 0; i < state.panels.length; i++) {
         var panel = state.panels[i];
         var id = String(panel.id);
+        // `__` 前缀是宿主/外壳保留命名空间（如 __selfcheck）：导航只列真实面板贡献，
+        // 保留项由 navFoot 承载。旧版本服务端曾把它混进 panels，这里做一层防御性过滤。
+        if (id.indexOf('__') === 0) continue;
         var title = hasText(panel.title) ? String(panel.title) : id;
         var health = hasText(panel.health) ? String(panel.health) : 'unknown';
 
@@ -1129,6 +1723,7 @@ td.actions-cell .btn{margin-left:6px}
     var title = panelTitleOf(id);
     var durationMs = (typeof data.durationMs === 'number') ? data.durationMs : null;
     renderPanelShell(title, durationMs);
+    applyPanelStyle(id);
     if (hasText(data.generatedAt)) {
       dom.panelDuration.title = '生成时间：' + fmtTime(data.generatedAt);
     }
@@ -1271,9 +1866,20 @@ td.actions-cell .btn{margin-left:6px}
     tickTimer = window.setInterval(tick, REFRESH_MS);
   }
 
+  // 用户正在面板里编辑（输入框/文本域/下拉聚焦中）→ 本轮自动刷新跳过。
+  // 理由：刷新会重建面板 DOM，抢走焦点与未提交的输入；宁可晚 5 秒更新数据。
+  function userIsEditing() {
+    var active = document.activeElement;
+    if (!active || !dom.panelBody) return false;
+    var tag = String(active.tagName || '').toUpperCase();
+    if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') return false;
+    return dom.panelBody.contains(active);
+  }
+
   function tick() {
     if (state.autoRefresh !== true) return;
     if (document.visibilityState !== 'visible') return;   // 双保险：隐藏时绝不打扰宿主
+    if (userIsEditing()) return;                          // 编辑中：让位给用户，下一轮再刷
     refreshCurrent();
   }
 
@@ -1335,6 +1941,8 @@ td.actions-cell .btn{margin-left:6px}
     dom.panelDuration = document.getElementById('panelDuration');
     dom.panelBody = document.getElementById('panelBody');
     dom.hostVersion = document.getElementById('hostVersion');
+    dom.content = document.getElementById('content');
+    dom.themeSelect = document.getElementById('themeSelect');
     dom.autoRefresh = document.getElementById('autoRefresh');
     dom.refreshBtn = document.getElementById('refreshBtn');
   }
@@ -1346,6 +1954,12 @@ td.actions-cell .btn{margin-left:6px}
     window.addEventListener('unhandledrejection', onUnhandledRejection);
 
     dom.refreshBtn.addEventListener('click', function () { refreshAll(); });
+
+    if (dom.themeSelect) {
+      dom.themeSelect.addEventListener('change', function () {
+        applyTheme(dom.themeSelect.value, true);
+      });
+    }
 
     dom.autoRefresh.addEventListener('change', function () {
       state.autoRefresh = dom.autoRefresh.checked === true;
@@ -1361,6 +1975,7 @@ td.actions-cell .btn{margin-left:6px}
   async function boot() {
     cacheDom();
     bindHandlers();
+    applyTheme(resolveTheme(), false);   // 首屏前定皮肤：先上令牌再拉数据，避免闪一下默认色
     await loadRegistry();
 
     var hashed = readHashPanelId();

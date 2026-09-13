@@ -302,6 +302,7 @@ export function createGrowthProfilePanel(deps: GrowthProfileDeps): PanelContribu
     order: 30,
     icon: 'seed',
     description: '自我模型 + 记忆规模 + 周目存档 + 技能/插件规模 + 灵魂版本（只读，被动哲学）',
+    style: { accent: '#34d399' },
     view: () => toGrowthSpec(deps),
   }
 }

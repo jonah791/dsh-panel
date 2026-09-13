@@ -6,11 +6,128 @@
  * 慢面板会降级」，而不是靠线上撞运气（AGENTS.md §5.9 §2 尸体测试纪律）。
  */
 import type {
-  ActionLevel, ActionSpec, PanelContribution, PanelHealth, PanelHealthSnapshot, PanelSummary,
+  ActionLevel, ActionSpec, PanelContribution, PanelHealth, PanelHealthSnapshot, PanelStyle, PanelSummary,
+  ViewSpec,
 } from './types.ts'
 
 /** 面板 id 形状：小写字母/数字/连字符（与命名规范一致）。 */
 const PANEL_ID_RE = /^[a-z0-9][a-z0-9-]*$/
+
+/** 强调色形状：只接受颜色字面量（CSS 注入面收敛为一个色值，不接受任何选择器/函数）。 */
+const ACCENT_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/
+
+/** 视图规格预算：块节点上限与嵌套深度上限（面板不可用超大视图拖垮外壳）。 */
+export const VIEW_MAX_BLOCKS = 2000
+export const VIEW_MAX_DEPTH = 8
+
+/**
+ * 校验面板自带视觉（fail-loud：样式字段是声明式契约，写错应当当场暴露而不是静默丢弃）。
+ * @throws accent 形状非法或 density 取值非法
+ */
+export function assertValidStyle(panelId: string, style: PanelStyle | undefined): void {
+  if (style === undefined) return
+  if (style.accent !== undefined && !ACCENT_RE.test(style.accent)) {
+    throw new Error(`panel "${panelId}": illegal style.accent "${style.accent}"（要求 #rgb / #rrggbb / #rrggbbaa）`)
+  }
+  if (style.density !== undefined && style.density !== 'comfortable' && style.density !== 'compact') {
+    throw new Error(`panel "${panelId}": illegal style.density "${String(style.density)}"（要求 comfortable / compact）`)
+  }
+}
+
+/** 视图规格校验结果。 */
+export type ViewSpecCheck = { ok: true } | { ok: false; error: string }
+
+/** 需要至少一个数组字段的块类型（渲染器没有它就只能画空）。 */
+const ARRAY_FIELDS: Record<string, string> = {
+  sections: 'blocks',
+  metrics: 'items',
+  table: 'columns',
+  list: 'items',
+  kv: 'pairs',
+  text: 'lines',
+  timeline: 'events',
+  actions: 'items',
+  form: 'fields',
+  chart: 'series',
+  log: 'lines',
+  progress: 'items',
+  tabs: 'items',
+}
+
+/** 图的合法取值（渲染器只认这三种）。 */
+const CHART_TYPES = new Set(['bar', 'line', 'donut'])
+
+/**
+ * 校验视图规格（**形状级**，不做语义裁决）。
+ *
+ * 纪律：未知 kind 放行（渲染器降级为"未知块"提示——白名单先小后扩，旧外壳不能被新块打崩），
+ * 但**已知 kind 的必备数组字段必须存在**，否则面板会静默渲染成空块——那是"看起来成功"的失败。
+ * @param spec - 面板返回的视图规格
+ */
+export function validateViewSpec(spec: unknown): ViewSpecCheck {
+  if (spec === null || typeof spec !== 'object' || Array.isArray(spec)) {
+    return { ok: false, error: '视图规格非法：不是对象' }
+  }
+  const blocks = (spec as ViewSpec).blocks
+  if (!Array.isArray(blocks)) return { ok: false, error: '视图规格非法：缺少 blocks 数组' }
+
+  let count = 0
+  const walk = (list: unknown[], path: string, depth: number): ViewSpecCheck => {
+    if (depth > VIEW_MAX_DEPTH) {
+      return { ok: false, error: `视图规格非法：嵌套超过 ${String(VIEW_MAX_DEPTH)} 层（${path}）` }
+    }
+    for (let i = 0; i < list.length; i++) {
+      count += 1
+      if (count > VIEW_MAX_BLOCKS) {
+        return { ok: false, error: `视图规格非法：块数量超过 ${String(VIEW_MAX_BLOCKS)}（${path}）` }
+      }
+      const block = list[i] as { kind?: unknown } | null
+      if (block === null || typeof block !== 'object' || Array.isArray(block)) {
+        return { ok: false, error: `视图规格非法：${path}[${String(i)}] 不是对象` }
+      }
+      const kind = block.kind
+      if (typeof kind !== 'string' || kind === '') {
+        return { ok: false, error: `视图规格非法：${path}[${String(i)}] 缺少字符串 kind` }
+      }
+      const field = ARRAY_FIELDS[kind]
+      if (field !== undefined) {
+        const value = (block as Record<string, unknown>)[field]
+        if (!Array.isArray(value)) {
+          return { ok: false, error: `视图规格非法：${path}[${String(i)}]（${kind}）缺少数组字段 ${field}` }
+        }
+        if (kind === 'sections') {
+          const nested = walk(value, `${path}[${String(i)}].${field}`, depth + 1)
+          if (!nested.ok) return nested
+        }
+        if (kind === 'tabs') {
+          for (let t = 0; t < value.length; t++) {
+            const item = value[t] as { blocks?: unknown } | null
+            if (item === null || typeof item !== 'object' || !Array.isArray(item.blocks)) {
+              return { ok: false, error: `视图规格非法：${path}[${String(i)}].${field}[${String(t)}] 缺少 blocks 数组` }
+            }
+            const nested = walk(item.blocks, `${path}[${String(i)}].${field}[${String(t)}].blocks`, depth + 1)
+            if (!nested.ok) return nested
+          }
+        }
+      }
+      if (kind === 'chart') {
+        const type = (block as { chart?: unknown }).chart
+        if (typeof type !== 'string' || !CHART_TYPES.has(type)) {
+          return { ok: false, error: `视图规格非法：${path}[${String(i)}]（chart）chart 必须是 bar/line/donut` }
+        }
+      }
+      if (kind === 'form') {
+        const actionId = (block as { actionId?: unknown }).actionId
+        if (typeof actionId !== 'string' || actionId === '') {
+          return { ok: false, error: `视图规格非法：${path}[${String(i)}]（form）缺少字符串 actionId` }
+        }
+      }
+    }
+    return { ok: true }
+  }
+
+  return walk(blocks, 'blocks', 1)
+}
 
 /** 判定面板 id 是否合法。 */
 export function isValidPanelId(id: string): boolean {
@@ -152,6 +269,7 @@ export class PanelRegistry {
     if (this.entries.has(contribution.id)) {
       throw new Error(`panel: duplicate panel id "${contribution.id}"`)
     }
+    assertValidStyle(contribution.id, contribution.style)
     this.entries.set(contribution.id, { contribution, registeredAt: now, snapshot: emptySnapshot() })
     this.failures.set(contribution.id, 0)
     return () => {
@@ -174,6 +292,7 @@ export class PanelRegistry {
         order: e.contribution.order ?? 100,
         ...(e.contribution.icon === undefined ? {} : { icon: e.contribution.icon }),
         ...(e.contribution.description === undefined ? {} : { description: e.contribution.description }),
+        ...(e.contribution.style === undefined ? {} : { style: e.contribution.style }),
         health: e.snapshot.health,
       }))
       .sort((a, b) => (a.order === b.order ? a.title.localeCompare(b.title) : a.order - b.order))

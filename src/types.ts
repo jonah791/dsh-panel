@@ -22,6 +22,45 @@ export type ViewBlock =
   | { kind: 'text'; title?: string; lines: string[] }
   | { kind: 'timeline'; title?: string; events: Array<{ at: string; title: string; detail?: string; tone?: Tone }> }
   | { kind: 'actions'; title?: string; items: Array<{ actionId: string; label: string; level: ActionLevel }> }
+  // ---- 表现力扩展块（v0.5）：脱离官方皮肤束缚后的自由度，但**仍是声明式** ----
+  /** 声明式表单：字段与提交都绑定到一个已声明的动作（面板因此从"能看"变"能干活"）。 */
+  | {
+    kind: 'form'
+    title?: string
+    /** 提交时要存在于此面板动作表中的 action id（不存在 → 按钮禁用并说明原因）。 */
+    actionId: string
+    submitLabel?: string
+    note?: string
+    fields: Array<{
+      /** 参数名：必须与动作 params 声明一致，否则被宿主参数白名单丢弃。 */
+      name: string
+      label: string
+      type?: 'text' | 'textarea' | 'number' | 'checkbox' | 'select'
+      /** select 的选项（字符串或 {value,label}）。 */
+      options?: Array<string | { value: string; label?: string }>
+      placeholder?: string
+      required?: boolean
+      hint?: string
+      /** 宽字段（占满整行）。 */
+      wide?: boolean
+    }>
+  }
+  /** 图形块：零依赖内联 SVG（bar / line / donut）——数值由面板给出，画法由宿主负责。 */
+  | { kind: 'chart'; title?: string; chart: 'bar' | 'line' | 'donut'; series: Array<{ label: string; value: number; tone?: Tone }>; unit?: string; height?: number }
+  /** 日志块：等宽尾部视图（严重度着色），适合审计/构建/事故回放。 */
+  | { kind: 'log'; title?: string; lines: Array<{ at?: string; level?: 'info' | 'ok' | 'warn' | 'error' | 'debug'; text: string }> }
+  /** 量表块：进度/占比条（渲染层把值夹到 [0,max]——不信任输入）。 */
+  | { kind: 'progress'; title?: string; items: Array<{ label: string; value: number; max?: number; tone?: Tone; hint?: string }> }
+  /** 标签页块：把多个块分组（**纯客户端切换**，不产生额外请求）。 */
+  | { kind: 'tabs'; title?: string; items: Array<{ label: string; badge?: string; blocks: ViewBlock[] }> }
+
+/** 面板自带视觉（声明式、有形状校验——宿主不接受任意 CSS）。 */
+export interface PanelStyle {
+  /** 强调色：仅接受 `#rgb` / `#rrggbb` / `#rrggbbaa`（CSS 注入面收敛为一个颜色字面量）。 */
+  accent?: string
+  /** 密度：comfortable（默认）/ compact（面板自报"我信息密度高"）。 */
+  density?: 'comfortable' | 'compact'
+}
 
 /** 视图规格：JSON 可序列化（无函数/DOM/HTML），宿主渲染的唯一输入。 */
 export interface ViewSpec {
@@ -69,6 +108,8 @@ export interface PanelContribution {
   view: (params: Record<string, string>) => Promise<ViewSpec> | ViewSpec
   /** 可执行动作表。 */
   actions?: Record<string, ActionSpec>
+  /** 自带视觉（可选）：accent 颜色 + 密度。宿主校验形状后落到该面板容器上。 */
+  style?: PanelStyle
 }
 
 /** 注册表投影条目（/api/panel/registry 的元素）。 */
@@ -79,6 +120,8 @@ export interface PanelSummary {
   icon?: string
   description?: string
   health: PanelHealth
+  /** 面板自带视觉（原样投影；形状校验在注册时完成）。 */
+  style?: PanelStyle
 }
 
 /** 贡献的实测健康快照（只由宿主写入）。 */

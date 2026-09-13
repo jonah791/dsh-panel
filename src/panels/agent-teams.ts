@@ -278,6 +278,7 @@ export function createAgentTeamsPanel(deps: AgentTeamsDeps): PanelContribution {
     order: 40,
     icon: 'users',
     description: 'AgentTeams：成员状态、任务清单与 inbox 积压（只读）',
+    style: { accent: '#38bdf8' },
     view: () => toAgentTeamsSpec(deps),
   }
 }

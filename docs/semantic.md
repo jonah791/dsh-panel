@@ -1,6 +1,6 @@
 # dsh-panel 语义文档 v0.1 — 面板宿主（Panel Host）
 
-> 版本 v0.4 · 2026-09-13 · 作者：爱丽丝 · 状态：**已实现（M1 宿主 + M2 五面板 + 唯一 GUI 入口 + 零依赖客户端构建 + 写入动作/审批门；验收 6/13，见 §9）**
+> 版本 v0.5 · 2026-09-13 · 作者：爱丽丝 · 状态：**已实现（M1 宿主 + M2 五面板 + 唯一 GUI 入口 + 皮肤层与表现力块族 + 零依赖构建；验收 11/15，见 §9）**
 > 开发模式：**语义文档优先**——先写下"它应当是什么"，再让实现逼近本文档，最后由实践反过来修改本文档。
 > 本文档与被约束的代码同仓（`self-plugins/dsh-panel/docs/semantic.md`），随 GitHub 版本化。
 > 实现落点：`self-plugins/dsh-panel/src/*` + `self-plugins/dsh-growth-profile/src/panel.ts`
@@ -100,6 +100,7 @@ ctx.panel.register({
   view: async (params) => ViewSpec,          // 取数（可 async；宿主施加超时）
   actions?: Record<string, ActionSpec>,      // 见 §4.3
   description?: string,                      // 一句话用途（自检面板展示）
+  style?: PanelStyle,                        // 自带视觉（v0.5）：见 §4.6
 }): () => void                 // 返回 disposer；宿主内部用 ctx.effect 托管
 ```
 
@@ -120,9 +121,21 @@ ctx.panel.register({
 | `text` | 说明段落（纯文本，宿主负责转义） | `lines: string[]` |
 | `timeline` | 事件序列 | `events: [{at, title, detail?, tone?}]` |
 | `actions` | 动作按钮组 | `items: actionId[]` |
-| `sections` | 容器（唯一嵌套块） | `title?, blocks: Block[]` |
+| `sections` | 容器（嵌套块） | `title?, blocks: Block[]` |
 
+- **v0.5 表现力扩展块**（主人定调"前端可以更自由"；仍是声明式，宿主负责画法）：
+
+| block | 语义 | 关键字段 |
+|---|---|---|
+| `form` | 声明式表单 → 绑定一个已声明动作（面板从"能看"变"能干活"） | `actionId`, `fields: [{name,label,type?: text\|textarea\|number\|checkbox\|select, options?, placeholder?, required?, hint?, wide?}]`, `submitLabel?`, `note?` |
+| `chart` | 零依赖内联 SVG（bar / line / donut） | `chart: 'bar'\|'line'\|'donut'`, `series: [{label, value, tone?}]`, `unit?`, `height?` |
+| `log` | 等宽尾部日志（严重度着色） | `lines: [{at?, level?: info\|ok\|warn\|error\|debug, text}]` |
+| `progress` | 量表条（值夹到 [0,max]） | `items: [{label, value, max?, tone?, hint?}]` |
+| `tabs` | 客户端分页容器（嵌套块） | `items: [{label, badge?, blocks: Block[]}]` |
+
+- `[MUST]` **形状校验**：宿主在 `view()` 出口跑 `validateViewSpec`（已知 kind 的必备数组字段、`chart` 取值、`form.actionId`、块数 ≤ 2000、嵌套 ≤ 8 层）；不合规**响亮降级**而不是渲染成空块。未知 kind 放行（渲染器降级为"未知块"提示，白名单先小后扩）。
 - `[SHOULD]` 每个块带可选 `title`；空数据渲染为空态文案，不渲染空白区域。
+- `[MUST]` 表单提交与按钮走**同一条**派发路径（分级/审批门/确认门完全一致）；表单缺少动作元信息时保守按 `write` 处理。
 - `[MUST]` 宿主对所有字符串做 HTML 转义；**ViewSpec 里出现原始 HTML 一律当文本**。
 
 ### 4.3 动作 ABI `[MUST]`
@@ -167,6 +180,23 @@ type ActionSpec = {
 - **实测健康，不采信自报**：宿主记录每次 `view()` 的 `ok/durationMs`，据最近 N 次得出 `health: ok|degraded|down`。**贡献方声明的状态文字不得作为健康依据**（§5.0 的纪律：机制自述 ≠ 实证；见 AGENTS.md §5.17）。
 - **宿主缺位**：`ctx.panel` 不存在时，消费方 `[MUST]` 降级（记录日志/继续原有行为），不得抛错、不得阻塞自身主功能。
 - **宿主自身不可用**：面板页 404/500 时，主人仍可用 Telegram 与对话通道——面板是**增强**，不是命脉。
+
+---
+
+### 4.6 皮肤层与自带视觉 `[MUST]`（v0.5 · 主人 2026-09-13 定调"前端可以更自由"）
+
+面板是**独立页**（§6 主通道），不受官方 Web 皮肤约束；自由度收敛为两条声明式规则，而不是开放任意 CSS：
+
+1. **皮肤（外壳级）**：外壳所有颜色/圆角/字体/间距过设计令牌（`--bg/--fg/--card/--border/--topbar/--nav-bg/--sunken/--btn/--accent/--ok/--warn/--bad/--muted/--radius/--font-ui/--font-mono/…`），换主题只换令牌、不动结构。内置三套：
+   - `ink`（墨青，默认）：冷灰深色，通用；
+   - `terminal`（终端）：近黑 + 等宽 + 零圆角，为日志/仪表型面板；
+   - `paper`（纸质）：浅色阅读型，为文档/档案/长表格。
+   解析优先级 `[MUST]`：**URL `?theme=` > 本机记忆（localStorage）> 默认 `ink`**（URL 优先是为了链接可分可复现）。
+2. **面板自带视觉（贡献级）**：`style?: { accent?: string; density?: 'comfortable' | 'compact' }`。
+   - `accent` **只接受颜色字面量** `#rgb` / `#rrggbb` / `#rrggbbaa`——CSS 注入面收敛为一个色值（不接受选择器/函数/`var()`）；非法值**注册时 fail-loud**（不静默丢弃：否则面板以为换了色，实际没有）。
+   - `density: 'compact'` 落到容器 `data-density`，紧凑面板自报信息密度。
+   - 宿主渲染层**再验一次**形状（渲染层不信任输入），与注册时校验是两道闸而非重复。
+3. **刷新纪律 `[MUST]`**：自动刷新重建面板 DOM，**不得带走用户正在做的事**——标签页选择按 `(panelId|tabs|标签集合)` 记忆并恢复；表单草稿按 `(panelId|actionId)` 记录 / 回填 / 提交成功才丢弃；焦点在面板内输入控件上时，本轮自动刷新跳过（让位给用户）。
 
 ---
 
@@ -259,7 +289,10 @@ type ActionSpec = {
 | 12 | `delete-task`（destructive + requiresApproval）→ 判定层 403 拒发、执行层再拒一次；且审计落一条 `denied` | 单测 + 线上 dispatch + `audit.jsonl` | ✅ 已实测（线上，2026-09-13 17:11）：带 `confirm:true` 仍 → **HTTP 403** + `approvalHint`（`【面板请示】任务板 · 删除任务（须请示）…`）；同刻 `.taskboard/tasks.json` sha256 前后一致（`1e42cc0deaeba3181729f87e…`）；audit 视图 `delete-task · denied · requires-approval`；执行层拒绝由单测证明 |
 | 13 | 审计面板：坏行逐行跳过并计数、`limit` 边界（非法→默认/越界→夹到 500）、>512KB 只读尾部并如实标注 | 单测（夹具含坏行 + 4000 行大文件） | ✅ 已实测：`坏行逐行跳过并计数` / `limit 参数边界` / `超过 512KB → 只读尾部 + 如实标注截断` |
 
-**当前口径计数（fail-closed）**：`total=13 · proven=9（#4/#5/#6/#7/#9/#10/#11/#12/#13）· pending=4（#1/#2/#3/#8）` → 状态停在 `implemented`，**未达 `verified`**。
+| 14 | 视图规格形状校验：已知 kind 缺必备数组字段 / `chart` 取值非法 / `form` 缺 `actionId` / 超块数或超嵌套 → 宿主降级（不渲染空块）；未知 kind 放行 | 单测（6 条）+ 线上（所有面板视图经它放行） | ✅ 已实测：`tests/viewspec-validation.test.mjs` 6/6（合法全过 / 顶层形状 / 块形状 / 缺字段 / chart+form / 预算）；线上 5 面板视图全部 `ok` 经该闸 |
+| 15 | 皮肤层与自带视觉：三套皮肤可切（`?theme=` 优先 > 本机记忆 > 默认）、`accent` 非法**注册 fail-loud**、自动刷新**不带走**标签页选择与表单草稿、编辑中跳过刷新 | 单测（accent/density/注册）+ 无头浏览器对照实验 | ✅ 已实测：单测 `panel-style`（含非法 accent 抛错且不留半截条目）；线上对照——点「写操作」后输入并跨过 7s 刷新周期：页签仍为写操作、值保留、编辑中未重建 DOM（`nodeKeptWhileEditing=true`），失焦后真重建（`domWasRebuilt=true`）而草稿仍回填；`delete-task` 403 时同刻板面哈希不变（见 #12） |
+
+**当前口径计数（fail-closed）**：`total=15 · proven=11（#4/#5/#6/#7/#9/#10/#11/#12/#13/#14/#15）· pending=4（#1/#2/#3/#8）` → 状态停在 `implemented`，**未达 `verified`**。
 剩余 4 条的收敛路径：① 坏贡献注入（#2 抛错 / #3 挂起）→ 一次实验拿两条证据；② 卸载-重启实验（#1）；③ 组合测试去掉 panel 行（#8）。
 
 ---
@@ -311,6 +344,14 @@ type ActionSpec = {
 - **被实践补充（审批门的两层）**：`requiresApproval` 的判定层拒绝（403）已由 §9-#7 证明；本轮把"执行层也拒绝"补上——`delete-task` 的 `run` 自身返回拒绝文本。理由：判定层与执行层分属不同代码路径，**纵深防御比单点正确更便宜**。同时把"面板不提供删除通道"写进动作标签（`删除任务（须请示）`）与 §1 负边界条款（不再是权限后门）。
 - **被实践补充（视图与动作表不漂移）**：视图里的 `actions` 块原先手写、与贡献的动作表是两份数据——**两份平行维护的语义必然漂移**。→ 改为同一份 `taskboardActions(deps)` 同时供视图与贡献使用，并加断言测试（#13 同批）。
 
+### 11.9 · 实践修订记录（皮肤层 + 表现力块族 · 2026-09-13 第三轮）
+
+- **被主人定调**：「插件的前端可以更自由一点，可以用上不同的设计风格，功能也可以增加，因为脱离了官方原生 Web 界面的束缚」→ 新增 §4.6（皮肤层与自带视觉）+ §4.2 的五种表现力块；自由度以**两条声明式规则**落地（令牌化皮肤 + `PanelStyle`），不开放任意 CSS/DOM——"自由"不等于"宿主放弃渲染权"。
+- **被实践暴露（视觉复核发现的真实缺陷）**：自动刷新每 5 秒重建面板 DOM，把用户选中的标签页弹回第一页、把输入到一半的表单清空——**"刷新"变成了"抢用户的手"**。→ 修：标签页选择记忆、表单草稿记录/回填/成功才丢弃、编辑中跳过本轮刷新（§4.6 第 3 条），并立对照实验（跨刷新周期断言页签与输入值都在）。
+- **被实践暴露（导航重复项）**：服务端在 `/api/panel/registry` 里**合成**了一份 `__selfcheck`，而外壳的 `navFoot` 也承载它 → 导航出现两个「宿主自检」。→ 服务端只投影真实注册贡献；外壳对 `__` 保留命名空间再过滤一层（版本偏斜时的防御）。
+- **被实践补充（图表观感）**：零值柱画 2px 残条会被读成"有个很小的值"→ 零值不画柱（图例仍显示 0）；窄指标卡里的长串（`panelId·actionId`）会被硬断成两行 → 面板侧短化 + 移入 `hint`。教训：**"能显示"不等于"读得对"**，图形与窄容器的内容需要按容器形状裁剪。
+- **被实践确认（宿主自检的价值）**：本轮 5 次观察中有 3 处缺陷（重复导航项、零值残条、刷新抢输入）**都是先看到界面才发现的**，单测全绿时它们全都存在——界面是给主人用的那一面，必须真的看一眼（主人当场纠正"你不是自己就能看图吗"，遂把图像能力显式声明进 `settings.yaml`）。
+
 ---
 
 ## 11.6 · 与实现的关系
@@ -331,3 +372,4 @@ type ActionSpec = {
 | v0.2 | 2026-09-12 | **实践回修（第三拍）**：§4.1 新增接入方式 `[MUST]`（inject 等待 > get 探测）；新增 §11.5 实践修订记录（4 条：被确认/被修正/被补充×2）；新增 §11.6 与实现的关系（补系统必备节，修 D4）；登记进语义文档系统 `docs/semantics/registry.json`（id=panel-host） |
 | v0.3 | 2026-09-13 | **M2 收口 + 唯一 GUI 入口**：§6 新增 §6.1（面板入口按钮 = 官方 client slot 的唯一例外，含产物协议与 `bundle` 警告）；§8 新增 M2 达成行（宿主内置 4 面板）；新增 §11.7 实践修订记录（4 条：主人定调回写 / 面板 id 唯一性 / build 不重建 client 产物 / 取数口径）；§0 偏离日志新增一行 |
 | v0.4 | 2026-09-13 | **写入通道 + 审计页 + 零依赖构建**（插件 0.2.0 → **0.3.0**）：§6.1 产物协议改为 `tsc` + `bundle-client.mjs`（去 tsdown 借依赖，JSX 垫片）；§8 新增 M2+ 行（Panel #5 `audit`、taskboard 五个动作、删除两层拒绝）；§9 新增 #11/#12/#13（写入安全尸体测试 / 审批门两层 / 审计面板边界），计数 6/13；§11.6 补 `panels/*` 与打包脚本；新增 §11.8 实践修订记录（5 条）；§0 偏离日志新增构建链一行 |
+| v0.5 | 2026-09-13 | **皮肤层 + 表现力块族**（插件 **0.4.0**，主人定调"前端可以更自由"）：新增 §4.6（设计令牌 + 三套皮肤 ink/terminal/paper + `?theme=` 优先 + `PanelStyle{accent,density}` 形状校验 fail-loud + 刷新不抢用户输入的纪律）；§4.2 新增 `form`/`chart`/`log`/`progress`/`tabs` 五种块与形状校验条款；§9 新增 #14/#15（计数 11/15）；新增 §11.9 实践修订记录（5 条：定调落地 / 刷新抢输入缺陷 / 导航重复项 / 图表观感 / 界面必须先看一眼） |

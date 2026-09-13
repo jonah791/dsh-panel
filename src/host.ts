@@ -9,11 +9,11 @@
  */
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
-import { PanelRegistry, decideDispatch } from './registry.ts'
+import { PanelRegistry, decideDispatch, validateViewSpec } from './registry.ts'
 import { appendAudit, digestParams } from './audit.ts'
 import type {
   ActionContext, ActionResult, DispatchInput, DispatchOutcome, PanelContribution, PanelHostService,
-  PanelSummary, ViewOutcome, PanelHealthSnapshot,
+  PanelSummary, ViewOutcome, PanelHealthSnapshot, ViewSpec,
 } from './types.ts'
 
 /** 宿主运行参数。 */
@@ -109,13 +109,15 @@ export class PanelHost extends Service implements PanelHostService {
       return { ok: false, spec: null, generatedAt, durationMs, degraded: true, error }
     }
     const spec = result.value
-    if (spec === null || typeof spec !== 'object' || !Array.isArray(spec.blocks)) {
-      const error = '视图规格非法：缺少 blocks 数组'
-      this.registry.recordView(id, false, durationMs, error, generatedAt)
-      return { ok: false, spec: null, generatedAt, durationMs, degraded: true, error }
+    // 形状校验（v0.5）：块数量/嵌套深度/已知 kind 的必备数组字段。
+    // 为什么在这一层拦：面板静默渲染成空块是"看起来成功"的失败——宿主宁可响亮降级。
+    const check = validateViewSpec(spec)
+    if (!check.ok) {
+      this.registry.recordView(id, false, durationMs, check.error, generatedAt)
+      return { ok: false, spec: null, generatedAt, durationMs, degraded: true, error: check.error }
     }
     this.registry.recordView(id, true, durationMs, null, generatedAt)
-    return { ok: true, spec, generatedAt, durationMs, degraded: durationMs > this.opts.slowMs, error: null }
+    return { ok: true, spec: spec as ViewSpec, generatedAt, durationMs, degraded: durationMs > this.opts.slowMs, error: null }
   }
 
   /**

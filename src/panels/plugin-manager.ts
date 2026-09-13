@@ -275,6 +275,7 @@ export function createPluginManagerPanel(deps: PluginManagerDeps): PanelContribu
     order: 10,
     icon: 'plug',
     description: '查看自研插件清单/构建态与挂载态，启停经 patch + 哨兵生效',
+    style: { accent: '#f472b6' },
     view: (params) => toViewSpec(deps, params.profile ?? deps.defaultProfile),
     actions: {
       enable: {

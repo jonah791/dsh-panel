@@ -31,7 +31,7 @@ import { createAgentTeamsPanel } from './panels/agent-teams.ts'
 import type { ViewSpec } from './types.ts'
 
 /** 宿主版本（自检面板与 registry 展示，与 package.json 同步维护）。 */
-export const VERSION = '0.3.0'
+export const VERSION = '0.4.0'
 
 export const name = 'agent-panel'
 export const inject = ['webServer'] as const
@@ -264,10 +264,9 @@ export function apply(ctx: Context, config: Config): void {
         json(res, 200, {
           ok: true,
           host: { version: VERSION, startedAt },
-          panels: [
-            ...host.list(),
-            { id: '__selfcheck', title: '宿主自检', order: 9999, icon: 'shield', description: '宿主与贡献的实测健康', health: 'ok' as const },
-          ],
+          // panels 只列**真实注册的贡献**。`__selfcheck` 不是面板：它是外壳自带的一项，
+          // 由 navFoot 单独承载——从前在这里合成一份，导致导航里出现两个「宿主自检」。
+          panels: host.list(),
         })
       } catch (e) {
         json(res, 500, { ok: false, error: String(e) })
