@@ -1,6 +1,6 @@
 # dsh-panel 语义文档 v0.1 — 面板宿主（Panel Host）
 
-> 版本 v0.3 · 2026-09-12（文档 2026-09-13）· 作者：爱丽丝 · 状态：**已实现（M1 宿主 + M2 四面板收口 + 唯一 GUI 入口；验收 4/10，见 §9）**
+> 版本 v0.4 · 2026-09-13 · 作者：爱丽丝 · 状态：**已实现（M1 宿主 + M2 五面板 + 唯一 GUI 入口 + 零依赖客户端构建 + 写入动作/审批门；验收 6/13，见 §9）**
 > 开发模式：**语义文档优先**——先写下"它应当是什么"，再让实现逼近本文档，最后由实践反过来修改本文档。
 > 本文档与被约束的代码同仓（`self-plugins/dsh-panel/docs/semantic.md`），随 GitHub 版本化。
 > 实现落点：`self-plugins/dsh-panel/src/*` + `self-plugins/dsh-growth-profile/src/panel.ts`
@@ -20,7 +20,7 @@
 |---|---|---|---|
 | 2026-09-12 | — | 初稿，尚无实现 | — |
 | 2026-09-12 | §10 Q1–Q6 | 主人放开了沙箱与审批（自主执行授权），未逐条裁决六问 | **按文档建议默认执行且标注为"临时默认"**，待主人复核后修订；改动均可逆（Q1 升级现有仓库 = 可回退 tag；Q3 尚未实施；Q5 默认关闭；Q6 拒绝派发只收紧不放宽） |
-| 2026-09-13 | §6（官方 client slot = 不采用） | 主人定调「GUI 只留 1 个入口」→ 本插件**新增 `./client` 导出**，注册官方会话头「面板」按钮（唯一入口，点击仅 `window.open('/panel/')`） | **登记为唯一例外并改文档**：§6 改为"原则上不采用 + §6.1 唯一例外"。该例外不含会话/视图耦合（无 remote/RPC、无 Conversation Node），代价被压到"一个按钮"；从此自研插件不得再自行注册 GUI 槽位 |
+| 2026-09-13 | §6.1（构建链 = tsdown → wrap-client） | 实测本仓 `node_modules` **既无 tsdown 也无 react/@types/react**——旧 `bundle` 靠借用别的仓的依赖才跑得起来，机器状态一变就"改客户端源码无法重建产物" | **改实现并改文档**：构建链改为 `tsc`（本仓已装）+ `scripts/bundle-client.mjs`（自研迷你打包）+ `src/client/jsx-shim.d.ts`（JSX 类型垫片）；文档 §6.1 同步（代价"props 拼写不再被拦住"已显式声明） |
 
 ---
 
@@ -210,7 +210,7 @@ type ActionSpec = {
 - 本插件**自己**提供 `./client`（`src/client/index.tsx`），只注册**一个** `conversation.session.header.actions` 贡献：`id=panel`、`order=20`、`label=面板`，点击 `window.open('/panel/', '_blank', 'noopener')`。
 - **例外为什么可以被接受**（对照 §6 的代价）：本 bundle 不做任何 RPC（不需要 `remote`/`$mount`）、不注册 Conversation Node、不做 CSS Modules——对官方客户端的依赖面收敛为「槽位名 + 一个按钮」，是 §6 所列三种代价里最小的形态。
 - **纪律**：此例外**只属于本插件**。其余插件**不得**再注册任何官方 GUI 槽位（含 `conversation.session.header.actions` / `conversation.view` / `shell.overlay` / `conversation.chat.*`）；需要界面就交面板贡献（§4.1）。
-- **产物协议**（实现事实，勿与源码混淆）：Web 客户端模块系统加载的是 `lib/client.js` 的**字节**，它必须自行调用 `window.__ModuleLoader__.load({ id: <包名>, factory })`，且 `exports` 必须有 `apply`（缺失会白屏）。构建链：`tsdown` → `lib/client.cjs` → `scripts/wrap-client.mjs` → `lib/client.js`（`npm run bundle`）。注意 `build` 只跑 host 侧 `tsc`（tsconfig `exclude: ["src/client"]`），**改客户端源码必须另跑 `npm run bundle`**，否则线上仍跑旧产物。
+- **产物协议**（实现事实，勿与源码混淆）：Web 客户端模块系统加载的是 `lib/client.js` 的**字节**，它必须自行调用 `window.__ModuleLoader__.load({ id: <包名>, factory })`，且 `exports` 必须有 `apply`（缺失会白屏）。构建链（v0.4 起**零额外依赖**）：`tsc -p tsconfig.client.build.json`（CJS → `lib/.client-build/`）→ `scripts/bundle-client.mjs`（拼模块注册表 + 包装）→ `lib/client.js`（`npm run bundle`）。只用到本仓已装的 `typescript`；JSX 类型由本地垫片 `src/client/jsx-shim.d.ts` 回答（本仓无 `react` / `@types/react`，而 live 插件目录跑 `pnpm install` 会触发 web 重启——见 AGENTS.md §5.15 §7）。注意 `build` 只跑 host 侧 `tsc`（tsconfig `exclude: ["src/client"]`），**改客户端源码必须另跑 `npm run bundle`**，否则线上仍跑旧产物；`npm run typecheck` 两条 tsconfig 都查。
 
 ---
 
@@ -234,6 +234,7 @@ type ActionSpec = {
 | **M1** | 宿主内核（服务 + 路由 + 渲染器 + 动作派发 + 自检面板）；**插件管理面板迁为 Panel #1**（吃自己的狗粮）；契约单测 + 尸体测试 | §9-1~9-9 全过；`/panel/` 可浏览插件管理且行为与旧版等价 |
 | **M2** | 迁入 growth-profile（成长档案）、taskboard（任务板）、teams（成员状态）为声明式面板 | 各旧路由保留一个版本周期（兼容），新面板数据与旧页一致（对照验收） |
 | **M2（2026-09-13 达成）** | 宿主内置 4 个面板：`plugin-manager`(10) / `taskboard`(20) / `growth-profile`(30) / `agent-teams`(40)——后三个**自包含取数**（直读 `.taskboard` / `.dsh` / `.agent-teams` 落盘），不依赖对应插件的运行期实现 | 注册表实测 4 个面板可见；`growth_profile` 工具与 `/api/growth-profile` 路由保持不动；四个自研插件的官方 GUI 槽位撤除（见 §6.1 纪律） |
+| **M2+（2026-09-13 第二轮）** | Panel #5 `audit`（面板审计，**只读**——审计是证据，不提供改写通道）；taskboard 获得**写入通道**：`post` / `claim` / `complete` / `archive-terminal` 四个 write 动作 + `delete-task`（destructive + `requiresApproval`，**两层拒绝**）；客户端构建改**零额外依赖**（`tsc` + `bundle-client.mjs`，去 tsdown/借依赖） | 注册表实测 5 个面板；写入语义与 `dsh-agent-taskboard` 的 Remote 逐条对照（id 形状/时间戳/错误码/完成即归档）；`delete-task` 线上 403 且板面零改动；`npm run bundle` 在只有 `typescript` 的依赖面上可跑 |
 | **M3** | 官方 index 轻量导航入口；SSE 或增量刷新；面板搜索/置顶；`ctx.panel` 服务对外发布 + README/命名核对 + 可选 release | 主人可从官方界面一键进入面板；贡献方接入只需 ≤ 30 行 |
 
 `[待定]` 关于 `plugin-inventory`：官方已提供只读插件投影（Remote-only，无同进程 Cordis 合并）。M1 的插件管理面板**先保留自扫实现**（它需要挂载/启停等写操作，官方服务只读且走 RPC）；M2 评估是否用官方投影替换"读取"部分以降低维护面。
@@ -255,8 +256,12 @@ type ActionSpec = {
 | 9 | 面板产物零官方 client 依赖、外壳体积达标、无公网请求 | 构建产物 grep + 体积 + 抓包/DOM 断言 | ✅ 已实测：`src/assets/shell.html` 48,087 字节 / 1 个 `<script>` / 0 个外部 URL（grep 实测） |
 | 10 | 自检面板的健康度来自宿主实测（喂"自报健康但实际超时"的贡献 → 判 degraded） | 坏样本注入 | ✅ 已实测：线上 `/api/panel/view?id=growth-profile` 返回宿主实测 `ok · 7 块 · 116ms`；单测 `computeHealth: 无样本 unknown → ok → 慢 degraded → 连续两次失败 down` |
 
-**当前口径计数（fail-closed）**：`total=10 · proven=4（#4/#7/#9/#10）· pending=6` → 状态停在 `implemented`，**未达 `verified`**。
-剩余 6 条的收敛路径：① 坏贡献注入三连（#2 抛错 / #3 挂起 / #10 假健康）→ 可一次实验拿三条证据；② 卸载-重启实验（#1）；③ 组合测试去掉 panel 行（#8）；④ 审计落盘断言（#5/#6 后半）。
+| 11 | 写入通道：板面解析失败时**拒绝写入**且文件字节不变（只读可宽容、写入必须苛刻） | 单测（隔离临时工作区，断言写前写后字节相同） | ✅ 已实测：`尸体测试：板面解析失败 → 拒绝写入，真实数据不被空板覆盖`（post/claim/complete 三条路径） |
+| 12 | `delete-task`（destructive + requiresApproval）→ 判定层 403 拒发、执行层再拒一次；且审计落一条 `denied` | 单测 + 线上 dispatch + `audit.jsonl` | ⏳ 待线上验收（单测已证两层拒绝：`审批门：「删除任务」判定层 403 拒发，执行层再拒一次`；线上 403 与 `denied` 落盘待下一步实测） |
+| 13 | 审计面板：坏行逐行跳过并计数、`limit` 边界（非法→默认/越界→夹到 500）、>512KB 只读尾部并如实标注 | 单测（夹具含坏行 + 4000 行大文件） | ✅ 已实测：`坏行逐行跳过并计数` / `limit 参数边界` / `超过 512KB → 只读尾部 + 如实标注截断` |
+
+**当前口径计数（fail-closed）**：`total=13 · proven=6（#4/#7/#9/#10/#11/#13）· pending=7` → 状态停在 `implemented`，**未达 `verified`**。
+剩余 7 条的收敛路径：① 坏贡献注入三连（#2 抛错 / #3 挂起）→ 一次实验拿两条证据；② 卸载-重启实验（#1）；③ 组合测试去掉 panel 行（#8）；④ 线上派发三连（删除动作 403 + `denied` 落盘 + 未知动作 404）→ #5/#6/#12 三条；⑤ #10 的"假健康"坏样本（线上已有一条真样本：growth-profile 实测 ok/116ms）。
 
 ---
 
@@ -299,11 +304,19 @@ type ActionSpec = {
 - **被实践暴露（文档未写的产物事实）**：`build` 脚本只编译 host 侧（tsconfig `exclude: ["src/client"]`），而 Web 加载的是 `lib/client.js` 字节 → **改客户端源码不跑 `bundle` 等于没改**。四个被撤槽位的插件里，只有 growth-profile 具备可跑的打包管线（tsdown + react 已装）；plugin-manager 与 taskboard 的 `lib/client.js` 是 2026-08-16 的旧 rolldown 产物、**未被 git 跟踪**、且其 `node_modules` 缺少 tsdown —— 无法从其源码重建（已升级为"改客户端源码 = 必须重建产物"的显式警告，见 §6.1 末条）。
 - **被实践补充（面板取数口径）**：三个新面板一律**自包含直读落盘**（不 import 其他插件、不做 RPC），因此"插件缺席"只表现为少一块数据，不会让面板或宿主加载失败。
 
+### 11.8 · 实践修订记录（写入通道 + 审计页 + 零依赖构建 · 2026-09-13 第二轮）
+
+- **被主人定调**：「这个面板还需要更新、完善」→ 本轮补三件事：写入动作（面板从"看板"变成"能干活"）、审计页（安全机制不可观测 = 无人能回答"它到底拦了什么"）、零依赖构建（消除"借别的仓的 tsdown 才跑得起来"的脆弱面）。
+- **被实践暴露（构建链的隐性依赖）**：旧 `bundle` = `tsdown && wrap-client.mjs`，而本仓 `node_modules` **既无 tsdown 也无 react/@types/react**（实测）——它能跑只是因为借了别的仓的依赖；一旦机器/仓状态变化，"改客户端源码 = 无法重建产物"（§11.7 已记录同一现象的后果）。→ 改为 `tsc`（本仓已装）+ `bundle-client.mjs`（自研迷你打包：模块注册表 + 相对解析 + 裸包名转交宿主模块表），JSX 类型由 `src/client/jsx-shim.d.ts` 回答。**代价诚实声明**：内在元素 props 是 `unknown`，拼写错误不再被 tsc 拦住（按钮级组件可接受；复杂组件应换真实 `@types/react`，届时删垫片——二者不可共存）。
+- **被实践确认（写入安全的对称性）**：只读路径"解析失败按空板显示"是**对的宽容**（让人看见问题）；写入路径若照抄它，就会拿空板覆盖真实数据。→ 新增 `readBoardStrict`：写入前严格读，解析失败一律拒绝且**零副作用**，并为此立尸体测试（#11）。
+- **被实践补充（审批门的两层）**：`requiresApproval` 的判定层拒绝（403）已由 §9-#7 证明；本轮把"执行层也拒绝"补上——`delete-task` 的 `run` 自身返回拒绝文本。理由：判定层与执行层分属不同代码路径，**纵深防御比单点正确更便宜**。同时把"面板不提供删除通道"写进动作标签（`删除任务（须请示）`）与 §1 负边界条款（不再是权限后门）。
+- **被实践补充（视图与动作表不漂移）**：视图里的 `actions` 块原先手写、与贡献的动作表是两份数据——**两份平行维护的语义必然漂移**。→ 改为同一份 `taskboardActions(deps)` 同时供视图与贡献使用，并加断言测试（#13 同批）。
+
 ---
 
 ## 11.6 · 与实现的关系
 
-- **主实现**（本文档描述的唯一真源）：`src/index.ts`（插件装配 + webServer 注册）、`src/host.ts`（`PanelHost` Service：注册表/路由/超时/审计）、`src/registry.ts`（注册与 ViewSpec 校验）、`src/types.ts`（契约类型）、`src/audit.ts`（`audit.jsonl` + paramsDigest）、`src/assets/shell.html`（自包含外壳，零官方 client 依赖）。
+- **主实现**（本文档描述的唯一真源）：`src/index.ts`（插件装配 + webServer 注册）、`src/host.ts`（`PanelHost` Service：注册表/路由/超时/审计）、`src/registry.ts`（注册与 ViewSpec 校验 + `decideDispatch` 判定）、`src/types.ts`（契约类型）、`src/audit.ts`（`audit.jsonl` + paramsDigest）、`src/assets/shell.html`（自包含外壳，零官方 client 依赖）、`src/panels/*.ts`（五个内置面板：plugin-manager / taskboard / growth-profile / agent-teams / audit）、`src/client/index.tsx` + `src/client/jsx-shim.d.ts`（唯一 GUI 入口按钮 + 零依赖 JSX 类型垫片）、`scripts/bundle-client.mjs`（客户端产物协议打包）。
 - **消费方实现**（非副本，各自独立）：`self-plugins/dsh-growth-profile/src/panel.ts`（首个消费方；不 import 宿主类型，用本地结构类型 + `ctx.inject(['panel'])` 接入）。
 - **同语义副本**：无——本能力单实现单仓库；跨插件协作走**契约**（§4.1/§4.2/§4.3）而非复制源码。
 - **未实现 / 未验证（显式标注）**：M3 的官方 `index-inject` 导航入口（未做，见 §6）；SSE 实时推送（v0.1 走轮询，见 U）；`ctx.panel` 的对外发布与命名规范（未做）。
@@ -318,3 +331,4 @@ type ActionSpec = {
 | v0.1 | 2026-09-12 | 初稿：定位/术语/概念模型/契约（注册·视图规格·动作 ABI·HTTP 面·失效语义）/信任边界/三条 GUI 通道取舍/迁移 M1-M3/10 条可证伪验收/6 个未决问题 |
 | v0.2 | 2026-09-12 | **实践回修（第三拍）**：§4.1 新增接入方式 `[MUST]`（inject 等待 > get 探测）；新增 §11.5 实践修订记录（4 条：被确认/被修正/被补充×2）；新增 §11.6 与实现的关系（补系统必备节，修 D4）；登记进语义文档系统 `docs/semantics/registry.json`（id=panel-host） |
 | v0.3 | 2026-09-13 | **M2 收口 + 唯一 GUI 入口**：§6 新增 §6.1（面板入口按钮 = 官方 client slot 的唯一例外，含产物协议与 `bundle` 警告）；§8 新增 M2 达成行（宿主内置 4 面板）；新增 §11.7 实践修订记录（4 条：主人定调回写 / 面板 id 唯一性 / build 不重建 client 产物 / 取数口径）；§0 偏离日志新增一行 |
+| v0.4 | 2026-09-13 | **写入通道 + 审计页 + 零依赖构建**（插件 0.2.0 → **0.3.0**）：§6.1 产物协议改为 `tsc` + `bundle-client.mjs`（去 tsdown 借依赖，JSX 垫片）；§8 新增 M2+ 行（Panel #5 `audit`、taskboard 五个动作、删除两层拒绝）；§9 新增 #11/#12/#13（写入安全尸体测试 / 审批门两层 / 审计面板边界），计数 6/13；§11.6 补 `panels/*` 与打包脚本；新增 §11.8 实践修订记录（5 条）；§0 偏离日志新增构建链一行 |

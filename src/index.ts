@@ -25,12 +25,13 @@ import { PanelHost } from './host.ts'
 import { createPluginManagerPanel } from './panels/plugin-manager.ts'
 import type { PluginManagerDeps } from './panels/plugin-manager.ts'
 import { createTaskboardPanel } from './panels/taskboard.ts'
+import { createAuditPanel } from './panels/audit.ts'
 import { createGrowthProfilePanel } from './panels/growth-profile.ts'
 import { createAgentTeamsPanel } from './panels/agent-teams.ts'
 import type { ViewSpec } from './types.ts'
 
 /** 宿主版本（自检面板与 registry 展示，与 package.json 同步维护）。 */
-export const VERSION = '0.2.0'
+export const VERSION = '0.3.0'
 
 export const name = 'agent-panel'
 export const inject = ['webServer'] as const
@@ -211,6 +212,10 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(() => host.register(createTaskboardPanel({ workspace })), 'dsh-panel: builtin taskboard')
   ctx.effect(() => host.register(createGrowthProfilePanel({ dshHome: dh, workspace })), 'dsh-panel: builtin growth-profile')
   ctx.effect(() => host.register(createAgentTeamsPanel({ workspace })), 'dsh-panel: builtin agent-teams')
+
+  // 内置面板 #5：面板审计（只读）——把宿主自己的派发审计（DSH_HOME/panel/audit.jsonl）
+  // 变成可看的一页：安全机制不可观测时，无人能回答「它到底拦了什么」。
+  ctx.effect(() => host.register(createAuditPanel({ panelDir: join(dh, 'panel') })), 'dsh-panel: builtin audit')
 
   // ---------- 页面 ----------
   const serveShell = (_req: IncomingMessage, res: ServerResponse): void => {

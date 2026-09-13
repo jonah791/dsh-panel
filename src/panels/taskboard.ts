@@ -12,9 +12,11 @@
  * 面板纪律（docs/semantic.md §4.2/§4.3）：只交声明——视图规格 + 动作表；不碰路由、不写 HTML/DOM。
  * @module dsh-panel/panels/taskboard
  */
+import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { PanelContribution, ViewSpec } from '../types.ts'
+import { actionItems } from '../registry.ts'
+import type { ActionSpec, PanelContribution, ViewSpec } from '../types.ts'
 
 /** 面板依赖：任务板位于 workspace 下的 `.taskboard/`。 */
 export interface TaskboardDeps {
@@ -37,6 +39,8 @@ export interface TaskRecord {
   assignee?: string
   summary?: string
   createdAt?: string
+  claimedAt?: string
+  doneAt?: string
   updatedAt?: string
 }
 
@@ -157,6 +161,8 @@ export function toTaskboardSpec(deps: TaskboardDeps): ViewSpec {
     for (const a of archives.slice(0, 5)) lines.push(`  · ${a.file} — ${a.archivedAt} · ${String(a.count)} 条`)
   }
   lines.push('归档语义：终态任务按 id 去重追加进当日 terminal-<日期>.json，并从板面移除；归档写失败则板面不改动。')
+  lines.push('写入动作：新建 / 认领 / 完成（write，直接生效）；「删除任务」标 destructive + requiresApproval——判定层 403 拒发、执行层再拒一次（面板不得成为绕过「须请示三类」的通道）。')
+  lines.push('写入纪律：解析失败一律拒绝写入（只读路径可宽容按空板显示，写入路径绝不拿空板覆盖真实文件）。')
 
   return {
     blocks: [
@@ -194,7 +200,7 @@ export function toTaskboardSpec(deps: TaskboardDeps): ViewSpec {
       {
         kind: 'actions',
         title: '动作',
-        items: [{ actionId: 'archive-terminal', label: '归档终态任务', level: 'write' }],
+        items: actionItems(taskboardActions(deps)),
       },
       {
         kind: 'text',
@@ -263,6 +269,216 @@ export function archiveTerminal(deps: TaskboardDeps, now: Date): { ok: boolean; 
   }
 }
 
+// ---------- 写入通道（动作） ----------
+//
+// 语义镜像：与 `dsh-agent-taskboard` 的 Remote（`mutate` 的状态流转 + `post` 新建）**同语义**——
+//   id = `t-` + uuid 前 8 位；createdAt/claimedAt/doneAt 用 UTC ISO；claim 仅限 pending、
+//   complete 仅限 claimed（默认负责人 `alice`）；完成即归档终态。
+// 与只读路径的关键差别：**写入前必须严格读**——解析失败一律拒绝写入，绝不拿「按空板处理」
+//   的结果覆盖真实文件（只读可以宽容，写入必须苛刻）。
+// 诚实声明的一处**有意发散**：写入时一并维护 `updatedAt`（插件的写路径不维护它，
+//   但其轮转逻辑 `timestampOf` 把 `updatedAt ?? createdAt` 当「最后修改」读——补上它是让该字段名副其实）。
+
+/** 写入通道结果（与归档动作同形状）。 */
+export interface MutateResult {
+  ok: boolean
+  message: string
+  data: Record<string, unknown>
+}
+
+/** 严格读板面：缺失 = 允许建板；解析失败 / 形状不符 = 拒绝写入。 */
+export function readBoardStrict(file: string): { ok: true; tasks: TaskRecord[] } | { ok: false; error: string } {
+  if (!existsSync(file)) return { ok: true, tasks: [] }
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as { tasks?: unknown }
+    if (!Array.isArray(parsed.tasks)) {
+      return { ok: false, error: '任务板 tasks 字段不是数组——拒绝写入（避免覆盖真实数据）' }
+    }
+    return { ok: true, tasks: parsed.tasks as TaskRecord[] }
+  } catch (e) {
+    return { ok: false, error: `任务板解析失败——拒绝写入（避免覆盖真实数据）：${String(e)}` }
+  }
+}
+
+/**
+ * 读-改-写通道：**拒绝路径零副作用**（未得到 ok 就不写盘）。
+ * @param deps - 工作区路径
+ * @param mutate - 就地修改 tasks 的纯判定+改写函数
+ */
+function mutateBoard(
+  deps: TaskboardDeps,
+  mutate: (tasks: TaskRecord[]) => MutateResult,
+): MutateResult {
+  const file = boardFileOf(deps)
+  const read = readBoardStrict(file)
+  if (!read.ok) return { ok: false, message: read.error, data: { board: file } }
+  const outcome = mutate(read.tasks)
+  if (!outcome.ok) return outcome
+  try {
+    writeAtomic(file, JSON.stringify({ tasks: read.tasks }, null, 2))
+  } catch (e) {
+    return { ok: false, message: `写入失败：${String(e)}`, data: { board: file } }
+  }
+  return outcome
+}
+
+/** 新建任务入参。 */
+export interface PostInput {
+  title: string
+  description?: string
+  type?: string
+  priority?: string
+  tags?: string[]
+}
+
+/**
+ * 新建任务（pending）。
+ * @param deps - 工作区路径
+ * @param now - 派发时刻（宿主注入）
+ * @param input - 任务字段
+ */
+export function postTask(deps: TaskboardDeps, now: Date, input: PostInput): MutateResult {
+  const title = input.title.trim()
+  if (title === '') return { ok: false, message: '标题不能为空（title-required）', data: {} }
+  const task = {
+    id: `t-${randomUUID().slice(0, 8)}`,
+    title,
+    description: input.description ?? '',
+    type: input.type === 'long' ? 'long' : 'short',
+    priority: input.priority === undefined || input.priority === '' ? 'normal' : input.priority,
+    tags: input.tags ?? [],
+    status: 'pending',
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  } satisfies TaskRecord
+  const result = mutateBoard(deps, (tasks) => {
+    tasks.push(task)
+    return { ok: true, message: `已新建任务 ${String(task.id)}：${task.title}（pending）`, data: { taskId: task.id, board: boardFileOf(deps) } }
+  })
+  return result
+}
+
+/**
+ * 认领任务（pending → claimed）。
+ * @param deps - 工作区路径
+ * @param now - 派发时刻
+ * @param taskId - 目标任务 id
+ * @param assignee - 负责人（缺省 alice，与插件一致）
+ */
+export function claimTask(deps: TaskboardDeps, now: Date, taskId: string, assignee?: string): MutateResult {
+  return mutateBoard(deps, (tasks) => {
+    const task = tasks.find((t) => t.id === taskId)
+    if (task === undefined) return { ok: false, message: `未找到任务 ${taskId}（task-not-found）`, data: {} }
+    if (task.status !== 'pending') {
+      return { ok: false, message: `任务 ${taskId} 当前状态为 ${String(task.status)}，仅 pending 可认领（not-pending）`, data: { status: task.status } }
+    }
+    task.status = 'claimed'
+    task.assignee = assignee === undefined || assignee === '' ? 'alice' : assignee
+    task.claimedAt = now.toISOString()
+    task.updatedAt = now.toISOString()
+    return { ok: true, message: `已认领 ${taskId}（claimed，负责人 ${String(task.assignee)}）`, data: { taskId, status: 'claimed', assignee: task.assignee } }
+  })
+}
+
+/**
+ * 完成任务（claimed → done），随后归档终态（完成即归档，与插件轮转同语义）。
+ * 归档失败**不回滚**完成（完成已落盘是事实），但在 message 里如实上报。
+ * @param deps - 工作区路径
+ * @param now - 派发时刻
+ * @param taskId - 目标任务 id
+ * @param summary - 完成摘要
+ */
+export function completeTask(deps: TaskboardDeps, now: Date, taskId: string, summary?: string): MutateResult {
+  const result = mutateBoard(deps, (tasks) => {
+    const task = tasks.find((t) => t.id === taskId)
+    if (task === undefined) return { ok: false, message: `未找到任务 ${taskId}（task-not-found）`, data: {} }
+    if (task.status !== 'claimed') {
+      return { ok: false, message: `任务 ${taskId} 当前状态为 ${String(task.status)}，仅 claimed 可完成（not-claimed）`, data: { status: task.status } }
+    }
+    task.status = 'done'
+    task.summary = summary ?? ''
+    task.doneAt = now.toISOString()
+    task.updatedAt = now.toISOString()
+    return { ok: true, message: `已完成 ${taskId}（done）`, data: { taskId, status: 'done' } }
+  })
+  if (!result.ok) return result
+  const archived = archiveTerminal(deps, now)
+  return {
+    ok: true,
+    message: `${result.message}；${archived.message}`,
+    data: { ...result.data, archive: archived.data, archiveOk: archived.ok },
+  }
+}
+
+/**
+ * 删除任务：**面板不提供该通道**（两层拒绝）。
+ * ① 判定层：动作声明 `requiresApproval: true` → 派发前即 403（零副作用）；
+ * ② 执行层：即便判定层被绕过，run 自身也拒绝——删除属「须请示三类（删数据）」。
+ * @param taskId - 目标任务 id（只用于回执文本）
+ */
+export function removeTaskRefused(taskId: string): MutateResult {
+  return {
+    ok: false,
+    message: `拒绝：删除任务（${taskId}）属须请示三类（删数据）——面板不得成为绕过主体性铁律的通道；请爱丽丝在正常通道取得主人授权后执行。`,
+    data: { taskId },
+  }
+}
+
+/**
+ * 任务板动作表（**视图与贡献共用同一份**：避免「显示的动作」与「可派的动作」漂移）。
+ * @param deps - 工作区路径
+ */
+export function taskboardActions(deps: TaskboardDeps): Record<string, ActionSpec> {
+  return {
+    post: {
+      label: '新建任务',
+      level: 'write',
+      params: { title: 'string', description: 'string', type: 'string', priority: 'string' },
+      run: (params, ctx) => {
+        const input: PostInput = { title: String(params.title ?? '') }
+        if (typeof params.description === 'string') input.description = params.description
+        if (typeof params.type === 'string') input.type = params.type
+        if (typeof params.priority === 'string') input.priority = params.priority
+        return postTask(deps, new Date(ctx.now), input)
+      },
+    },
+    claim: {
+      label: '认领任务',
+      level: 'write',
+      params: { taskId: 'string', assignee: 'string' },
+      run: (params, ctx) => claimTask(
+        deps,
+        new Date(ctx.now),
+        String(params.taskId ?? ''),
+        typeof params.assignee === 'string' ? params.assignee : undefined,
+      ),
+    },
+    complete: {
+      label: '完成任务',
+      level: 'write',
+      params: { taskId: 'string', summary: 'string' },
+      run: (params, ctx) => completeTask(
+        deps,
+        new Date(ctx.now),
+        String(params.taskId ?? ''),
+        typeof params.summary === 'string' ? params.summary : undefined,
+      ),
+    },
+    'archive-terminal': {
+      label: '归档终态任务',
+      level: 'write',
+      run: (_params, ctx) => archiveTerminal(deps, new Date(ctx.now)),
+    },
+    'delete-task': {
+      label: '删除任务（须请示）',
+      level: 'destructive',
+      requiresApproval: true,
+      params: { taskId: 'string' },
+      run: (params) => removeTaskRefused(String(params.taskId ?? '')),
+    },
+  }
+}
+
 /**
  * 构造「任务板」面板贡献。
  * @param deps - 工作区路径
@@ -274,14 +490,8 @@ export function createTaskboardPanel(deps: TaskboardDeps): PanelContribution {
     title: '任务板',
     order: 20,
     icon: 'check',
-    description: '任务板板面与归档：待办/进行中/终态计数、任务清单、终态归档（写入 archive/terminal-<日期>.json）',
+    description: '任务板板面与流转：计数、清单、新建/认领/完成、终态归档（写入 archive/terminal-<日期>.json）',
     view: () => toTaskboardSpec(deps),
-    actions: {
-      'archive-terminal': {
-        label: '归档终态任务',
-        level: 'write',
-        run: (_params, ctx) => archiveTerminal(deps, new Date(ctx.now)),
-      },
-    },
+    actions: taskboardActions(deps),
   }
 }

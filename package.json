@@ -1,6 +1,6 @@
 {
   "name": "dsh-panel",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "面板宿主（Panel Host）：前端统一入口——其他插件只提交「声明」（视图规格 + 动作表），由宿主渲染/派发/审计/实测健康；零官方 client 依赖。语义文档见 docs/semantic.md",
   "type": "module",
   "main": "lib/index.js",
@@ -28,16 +28,12 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@types/react": "^19.2.18",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "tsdown": "^0.22.14",
     "typescript": "^5.9.3"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "bundle": "tsdown && node scripts/wrap-client.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.build.json --noEmit",
+    "bundle": "node scripts/bundle-client.mjs",
     "test": "node --test \"tests/*.test.mjs\""
   },
   "dsh": {
