@@ -1,8 +1,9 @@
 # dsh-panel 语义文档 v0.1 — 面板宿主（Panel Host）
 
-> 状态：**草案 · 待主人评审** · 2026-09-12
+> 版本 v0.1 · 2026-09-12（文档 2026-09-13）· 作者：爱丽丝 · 状态：**已实现（M1 宿主 + M2 首个消费方；验收 4/10，见 §9）**
 > 开发模式：**语义文档优先**——先写下"它应当是什么"，再让实现逼近本文档，最后由实践反过来修改本文档。
 > 本文档与被约束的代码同仓（`self-plugins/dsh-panel/docs/semantic.md`），随 GitHub 版本化。
+> 实现落点：`self-plugins/dsh-panel/src/*` + `self-plugins/dsh-growth-profile/src/panel.ts`
 
 ---
 
