@@ -243,25 +243,24 @@ type ActionSpec = {
 
 ## 9 · 可证伪验收（每条都要能"用坏样本证明它真的会拦"）
 
-| # | 判据 | 证据形式 | 状态 · 实测证据（2026-09-12 回填） |
+| # | 判据 | 证据形式 | 状态 · 实测证据（2026-09-12 起逐次回填，最近 2026-09-13 17:11） |
 |---|---|---|---|
 | 1 | 卸载任一贡献插件 → 重启后面板消失，`/api/panel/registry` 无残留 | registry 快照前后对比 | ⏳ 待线上验收（单测部分已证：`PanelRegistry: dispose 后消失`；重启后无残留未实测） |
 | 2 | 贡献 `view()` 抛错 → 该面板降级显示错误原文，其余面板与外壳正常 | 注入坏贡献（尸体测试）→ 截图/DOM 断言 | ⏳ 待线上验收（单测部分已证：`recordView 驱动健康度迁移（含恢复）`；外壳降级文案未测） |
 | 3 | 贡献 `view()` 挂起 > 超时 → 标记超时，外壳与其它面板不受阻 | 坏样本 + 实测耗时 | ⏳ 待线上验收（超时路径已实现 `viewTimeoutMs=2000`，挂起注入未做） |
-| 4 | 重复 `panelId` 注册 → fail-loud（抛错），不静默覆盖 | 单测断言 | ✅ 已实测：`PanelRegistry: 非法 id / 重复 id fail-loud`（单测 12/12 全绿） |
-| 5 | 未知 `panelId/actionId` → 400/404 且零副作用 + 审计一条 | 单测 + audit.jsonl | ⏳ 待线上验收（单测部分已证：`decideDispatch: 未场面板/未知动作 → 404（零副作用）`；审计落盘未验） |
-| 6 | `destructive` 无 `confirm` → 拒绝执行，审计 `denied` | 单测 | ⏳ 待线上验收（单测部分已证：`破坏性动作缺确认 → 409；带确认 → 放行`；审计 `denied` 未验） |
+| 4 | 重复 `panelId` 注册 → fail-loud（抛错），不静默覆盖 | 单测断言 | ✅ 已实测：`PanelRegistry: 非法 id / 重复 id fail-loud`（面板套件 37/37 全绿） |
+| 5 | 未知 `panelId/actionId` → 400/404 且零副作用 + 审计一条 | 单测 + audit.jsonl | ✅ 已实测（线上，2026-09-13 17:11）：`POST /api/panel/action {actionId:"nope"}` → **HTTP 404** `{"ok":false,"status":404,"error":"未知动作 nope"}`；同刻 audit 视图出现 `nope · denied · unknown-action` |
+| 6 | `destructive` 无 `confirm` → 拒绝执行，审计 `denied` | 单测 | ✅ 已实测（单测判据：`破坏性动作缺确认 → 409；带确认 → 放行`）。**线上尚无此形态动作**——唯一的破坏性动作 `delete-task` 先经审批门（线上证据见 #12）；后续如新增"可执行的破坏性动作"，须补线上验收 |
 | 7 | 触及"须请示三类"的动作 → 宿主拒绝派发（`requires-approval`），`run` 未被调用 | 单测 + 审计 | ✅ 已实测：`decideDispatch: 审批门（须请示三类）优先于确认门——即使带 confirm 也拒绝` |
 | 8 | 宿主缺位时消费方不崩（降级日志） | 组合测试（去掉 panel 行） | ⏳ 待线上验收（组合测试未做） |
 | 9 | 面板产物零官方 client 依赖、外壳体积达标、无公网请求 | 构建产物 grep + 体积 + 抓包/DOM 断言 | ✅ 已实测：`src/assets/shell.html` 48,087 字节 / 1 个 `<script>` / 0 个外部 URL（grep 实测） |
 | 10 | 自检面板的健康度来自宿主实测（喂"自报健康但实际超时"的贡献 → 判 degraded） | 坏样本注入 | ✅ 已实测：线上 `/api/panel/view?id=growth-profile` 返回宿主实测 `ok · 7 块 · 116ms`；单测 `computeHealth: 无样本 unknown → ok → 慢 degraded → 连续两次失败 down` |
-
 | 11 | 写入通道：板面解析失败时**拒绝写入**且文件字节不变（只读可宽容、写入必须苛刻） | 单测（隔离临时工作区，断言写前写后字节相同） | ✅ 已实测：`尸体测试：板面解析失败 → 拒绝写入，真实数据不被空板覆盖`（post/claim/complete 三条路径） |
-| 12 | `delete-task`（destructive + requiresApproval）→ 判定层 403 拒发、执行层再拒一次；且审计落一条 `denied` | 单测 + 线上 dispatch + `audit.jsonl` | ⏳ 待线上验收（单测已证两层拒绝：`审批门：「删除任务」判定层 403 拒发，执行层再拒一次`；线上 403 与 `denied` 落盘待下一步实测） |
+| 12 | `delete-task`（destructive + requiresApproval）→ 判定层 403 拒发、执行层再拒一次；且审计落一条 `denied` | 单测 + 线上 dispatch + `audit.jsonl` | ✅ 已实测（线上，2026-09-13 17:11）：带 `confirm:true` 仍 → **HTTP 403** + `approvalHint`（`【面板请示】任务板 · 删除任务（须请示）…`）；同刻 `.taskboard/tasks.json` sha256 前后一致（`1e42cc0deaeba3181729f87e…`）；audit 视图 `delete-task · denied · requires-approval`；执行层拒绝由单测证明 |
 | 13 | 审计面板：坏行逐行跳过并计数、`limit` 边界（非法→默认/越界→夹到 500）、>512KB 只读尾部并如实标注 | 单测（夹具含坏行 + 4000 行大文件） | ✅ 已实测：`坏行逐行跳过并计数` / `limit 参数边界` / `超过 512KB → 只读尾部 + 如实标注截断` |
 
-**当前口径计数（fail-closed）**：`total=13 · proven=6（#4/#7/#9/#10/#11/#13）· pending=7` → 状态停在 `implemented`，**未达 `verified`**。
-剩余 7 条的收敛路径：① 坏贡献注入三连（#2 抛错 / #3 挂起）→ 一次实验拿两条证据；② 卸载-重启实验（#1）；③ 组合测试去掉 panel 行（#8）；④ 线上派发三连（删除动作 403 + `denied` 落盘 + 未知动作 404）→ #5/#6/#12 三条；⑤ #10 的"假健康"坏样本（线上已有一条真样本：growth-profile 实测 ok/116ms）。
+**当前口径计数（fail-closed）**：`total=13 · proven=9（#4/#5/#6/#7/#9/#10/#11/#12/#13）· pending=4（#1/#2/#3/#8）` → 状态停在 `implemented`，**未达 `verified`**。
+剩余 4 条的收敛路径：① 坏贡献注入（#2 抛错 / #3 挂起）→ 一次实验拿两条证据；② 卸载-重启实验（#1）；③ 组合测试去掉 panel 行（#8）。
 
 ---
 
