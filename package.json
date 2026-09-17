@@ -1,6 +1,6 @@
 {
   "name": "dsh-panel",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "面板宿主（Panel Host）：前端统一入口——其他插件只提交「声明」（视图规格 + 动作表），由宿主渲染/派发/审计/实测健康；零官方 client 依赖。语义文档见 docs/semantic.md",
   "type": "module",
   "main": "lib/index.js",

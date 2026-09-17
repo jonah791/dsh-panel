@@ -127,6 +127,25 @@ export function readMemoryEntries(dshHome: string): MemoryEntry[] {
 }
 
 /** 统计技能目录（含 SKILL.md 的子目录数）。 */
+export interface AssetsSnapshot {
+  generatedAt?: string
+  chains?: Array<{ chain?: string; address?: string; native?: { symbol?: string; amount?: string }; usdc?: string; status?: string; note?: string }>
+  accounts?: Array<{ site?: string; username?: string; fields?: string[] }>
+  domains?: Array<{ name?: string; status?: string; plan?: string }>
+  code?: { plugins?: number; skills?: number; checkpoints?: number; memoryEntries?: number }
+  totals?: { usdcUsd?: string; note?: string }
+  notes?: string[]
+}
+
+/**
+ * 数字资产快照（侧车产物，由 `dsh-growth-profile` 插件写出到 `<dshHome>/growth-profile-assets.json`）。
+ * 单一真源纪律（AGENTS.md §5.22 规则 4）：本面板**不做**链上/vault/域名取数——只读快照，
+ * 否则同一事实会长出两套判据。快照缺失时如实说明，不伪装成 0。
+ */
+export function readAssetsSnapshot(dshHome: string): AssetsSnapshot | undefined {
+  return readJson<AssetsSnapshot>(join(dshHome, 'growth-profile-assets.json'))
+}
+
 export function countSkills(deps: GrowthProfileDeps): { total: number; roots: string[] } {
   const roots = [
     join(deps.dshHome, 'skills'),
@@ -207,6 +226,7 @@ export function toGrowthSpec(deps: GrowthProfileDeps): ViewSpec {
   const soul = readSoulVersion(deps.workspace)
   const days = bornDays(state?.bornAt)
   const self = state?.self
+  const assets = readAssetsSnapshot(deps.dshHome)
 
   // ---- 里程碑（记忆库 tags 含 milestone）→ 与最近存档合并成一条时间线 ----
   const milestones = entries
@@ -266,6 +286,87 @@ export function toGrowthSpec(deps: GrowthProfileDeps): ViewSpec {
       ],
     },
   ]
+
+  // ---- 数字资产（v0.4：只读侧车快照，由 growth_profile 工具刷新） ----
+  if (assets === undefined) {
+    blocks.push({
+      kind: 'text',
+      title: '数字资产',
+      lines: ['尚无资产快照 —— 调用一次 `growth_profile` 工具即可生成（面板不自行取数，避免两处口径漂移）'],
+    })
+  } else {
+    const chains = assets.chains ?? []
+    const accounts = assets.accounts ?? []
+    const domains = assets.domains ?? []
+    const codes = assets.code ?? {}
+    const usdc = assets.totals?.usdcUsd ?? '—'
+    if (chains.length + accounts.length + domains.length > 0) {
+      blocks.push({
+        kind: 'metrics',
+        title: '数字资产 · 总览（快照）',
+        items: [
+          { label: 'USDC 折算', value: `$${usdc}`, hint: '只折算 stablecoin；原生币显示原量，不臆断估值', tone: Number(usdc) > 0 ? 'ok' : 'muted' },
+          { label: '链上地址', value: String(chains.length), hint: chains.map((c) => c.chain ?? '').filter(Boolean).join(' / ') },
+          { label: '账号（vault）', value: String(accounts.length), hint: '只列非密元数据' },
+          { label: '域名', value: String(domains.length) },
+          { label: '代码资产', value: `${String(codes.plugins ?? 0)} 插件 / ${String(codes.skills ?? 0)} 技能`, hint: `checkpoint ${String(codes.checkpoints ?? 0)} · 记忆 ${String(codes.memoryEntries ?? 0)}` },
+        ],
+      })
+    }
+    if (chains.length > 0) {
+      blocks.push({
+        kind: 'table',
+        title: '链上余额（只读快照）',
+        columns: [
+          { key: 'chain', label: '链' },
+          { key: 'address', label: '地址' },
+          { key: 'amount', label: '原生', align: 'right' },
+          { key: 'usdc', label: 'USDC', align: 'right' },
+          { key: 'status', label: '状态' },
+        ],
+        rows: chains.map((c) => ({
+          chain: c.chain ?? '—',
+          address: clip(c.address, 16),
+          amount: `${c.native?.amount ?? '—'} ${c.native?.symbol ?? ''}`.trim(),
+          usdc: c.usdc ?? '—',
+          status: c.status === 'ok' ? 'ok' : `error: ${clip(c.note, 40)}`,
+        })),
+      })
+    }
+    if (accounts.length > 0) {
+      blocks.push({
+        kind: 'table',
+        title: `账号清单（${String(accounts.length)} 个 · vault 元数据，无密值）`,
+        columns: [
+          { key: 'site', label: '站点' },
+          { key: 'username', label: '账号' },
+          { key: 'fields', label: '凭据字段' },
+        ],
+        rows: accounts.map((a) => ({ site: a.site ?? '—', username: clip(a.username, 36), fields: (a.fields ?? []).join(',') })),
+      })
+    }
+    if (domains.length > 0) {
+      blocks.push({
+        kind: 'table',
+        title: '域名',
+        columns: [
+          { key: 'name', label: '域名' },
+          { key: 'status', label: '状态' },
+          { key: 'plan', label: '方案' },
+        ],
+        rows: domains.map((d) => ({ name: d.name ?? '—', status: d.status ?? '—', plan: d.plan ?? '—' })),
+      })
+    }
+    const assetNotes = assets.notes ?? []
+    if (assetNotes.length > 0) {
+      blocks.push({ kind: 'text', title: '资产盘点降级说明（取数失败不伪装成 0）', lines: assetNotes.map((n) => clip(n, 160)) })
+    }
+    blocks.push({
+      kind: 'text',
+      title: '资产快照',
+      lines: [`快照时间：${shortDate(assets.generatedAt)}（由 growth_profile 工具刷新；面板只读，不自行取数）`],
+    })
+  }
 
   if (events.length > 0) {
     blocks.push({ kind: 'timeline', title: '周目与里程碑', events })
