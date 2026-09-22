@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>面板审计 · 自带前端</title>
+<!--
+  ============================================================================
+  面板审计 · 插件自带前端（dsh-panel v0.5「中转站」的通路正样本）
+  ============================================================================
+  这一页存在的理由，是让 §4.7 的两条通路**真的有正样本可被验证**：
+    1. 静态托管：本页由宿主从 `/panel-assets/audit/index.html` 原样送出；
+    2. 请求反代：本页的数据来自 `/api/panel/audit/records`，由本面板自己的
+       `handle()` 应答，宿主不碰内容。
+  没有正样本时，`/panel-assets` 与 `/api/panel/<id>/*` 就是从未被行使的路径
+  ——测试全绿也不构成证据（AGENTS.md §5.9 规则 2：对照组不失败 = 无结论）。
+
+  它是**最小通路样本**，不是终版界面：正式视觉待迁移时另做。所以它把
+  「我是谁、数据从哪来」直接写在页面上，避免被误读成产品界面。
+  ============================================================================
+-->
+<style>
+  :root {
+    --bg: #0f1117; --fg: #e6e8ee; --muted: #9aa3b2; --card: #171a22;
+    --border: #262b36; --accent: #a78bfa; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f7f8fa; --fg: #1b1f27; --muted: #5c6675; --card: #fff; --border: #e2e5ea; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px 20px 28px; background: var(--bg); color: var(--fg);
+    font: 14px/1.6 system-ui, -apple-system, "Segoe UI", "Noto Sans SC", sans-serif;
+  }
+  h1 { margin: 0 0 4px; font-size: 17px; font-weight: 600; }
+  .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 14px; }
+  .note {
+    background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: 6px; padding: 10px 12px; margin-bottom: 14px; color: var(--muted); font-size: 12.5px;
+  }
+  .note code { font-family: var(--mono); color: var(--fg); }
+  .bar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  button {
+    background: var(--card); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  .status { color: var(--muted); font-size: 12.5px; font-family: var(--mono); }
+  .status.bad { color: #f87171; }
+  .status.ok { color: #34d399; }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border); font-size: 12.5px; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; }
+  td.mono { font-family: var(--mono); }
+  tr:last-child td { border-bottom: 0; }
+  .empty { padding: 14px; color: var(--muted); background: var(--card); border: 1px solid var(--border); border-radius: 6px; }
+  .outcome-ok { color: #34d399; }
+  .outcome-denied { color: #fbbf24; }
+  .outcome-error, .outcome-timeout { color: #f87171; }
+</style>
+</head>
+<body>
+  <h1>面板审计 · 自带前端</h1>
+  <div class="sub">dsh-panel v0.5「中转站」通路正样本 · 本页与数据均由本面板自己提供</div>
+
+  <div class="note">
+    静态托管：<code>/panel-assets/audit/index.html</code>（宿主原样送出本文件）<br>
+    请求反代：<code>/api/panel/audit/records?limit=20</code>（本面板 <code>handle()</code> 应答）<br>
+    宿主只做<b>入口聚合 / 静态托管 / 请求反代</b>——不解析、不注入、不重写本页内容。
+  </div>
+
+  <div class="bar">
+    <button id="reload">重新取数</button>
+    <span class="status" id="status">就绪</span>
+  </div>
+
+  <div id="host"><div class="empty">加载中…</div></div>
+
+<script>
+  var out = document.getElementById('host');
+  var status = document.getElementById('status');
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function setStatus(text, tone) {
+    status.textContent = text;
+    status.className = 'status' + (tone ? ' ' + tone : '');
+  }
+
+  function render(rows) {
+    if (!rows || rows.length === 0) {
+      out.innerHTML = '<div class="empty">暂无派发记录（审计文件可能还不存在——这是正常初始态，不是错误）。</div>';
+      return;
+    }
+    var html = '<table><thead><tr>'
+      + '<th>时刻</th><th>面板</th><th>动作</th><th>分级</th><th>结果</th><th>耗时(ms)</th><th>说明</th>'
+      + '</tr></thead><tbody>';
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var oc = 'outcome-' + esc(r.outcome);
+      html += '<tr>'
+        + '<td class="mono">' + esc(String(r.at || '').slice(0, 19).replace('T', ' ')) + '</td>'
+        + '<td>' + esc(r.panelId) + '</td>'
+        + '<td>' + esc(r.actionId) + '</td>'
+        + '<td>' + esc(r.level) + '</td>'
+        + '<td class="' + oc + '">' + esc(r.outcome) + '</td>'
+        + '<td class="mono">' + esc(r.durationMs) + '</td>'
+        + '<td>' + esc(String(r.reason || r.message || '').slice(0, 80)) + '</td>'
+        + '</tr>';
+    }
+    out.innerHTML = html + '</tbody></table>';
+  }
+
+  function load() {
+    setStatus('取数中…', '');
+    fetch('/api/panel/audit/records?limit=20', { headers: { accept: 'application/json' } })
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function (data) {
+        var rows = (data && data.records) || [];
+        setStatus('已取 ' + rows.length + ' 条 · ' + new Date().toLocaleTimeString(), 'ok');
+        render(rows);
+      })
+      .catch(function (err) {
+        setStatus('取数失败：' + err.message, 'bad');
+        out.innerHTML = '<div class="empty">反代通路取数失败：' + esc(err.message)
+          + '<br>（若宿主未接线 <code>/api/panel/audit/*</code>，这里会如实失败——本页不假装成功。）</div>';
+      });
+  }
+
+  document.getElementById('reload').addEventListener('click', load);
+  load();
+</script>
+</body>
+</html>

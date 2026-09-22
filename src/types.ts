@@ -67,6 +67,54 @@ export interface ViewSpec {
   blocks: ViewBlock[]
 }
 
+/**
+ * 插件自带前端（v0.5「中转站」契约 §4.7）。
+ *
+ * 语义：**前端形态归插件**——宿主不规定技术栈、不解析其 HTML、不注入不重写，
+ * 只做三件事：给入口（一屏聚合）、托管静态资源（`/panel-assets/<id>/…`）、
+ * 反代数据请求（`/api/panel/<id>/*`）。
+ */
+export interface PanelFrontend {
+  /**
+   * 静态资源目录。**推荐绝对路径**（贡献方用 `import.meta.url` 自算——显式优先于推导）；
+   * 相对路径按**注册时解析出的插件根**解析，且不得越出插件根（越界 = 注册 fail-loud）。
+   * 缺省 = 无静态资源（该插件的 `/panel-assets/<id>/…` 一律 404）。
+   */
+  assetsDir?: string
+  /** 入口页文件名（相对 `assetsDir`，如 `index.html`）。缺省 = 宿主不提供入口页兜底。 */
+  entry?: string
+}
+
+/**
+ * 插件数据请求（**纯数据**：宿主不把 Node 原生 `req`/`res` 交给插件）。
+ * 这样插件侧逻辑可以在没有 HTTP 服务器的前提下被离线单测（可测性是硬要求）。
+ */
+export interface PanelHttpRequest {
+  /** HTTP 方法（原样透传，宿主不做方法白名单）。 */
+  method: string
+  /** 该插件命名空间内的路径（`/api/panel/<id>` 之后的部分，含前导 `/`，如 `/items/3`）。 */
+  path: string
+  /** 查询参数（同名多值取最后一次；宿主已解码）。 */
+  query: Record<string, string>
+  /** 请求头（键小写；数组值以 `, ` 连接）。 */
+  headers: Record<string, string>
+  /** 请求体原文（UTF-8 文本；不做 JSON 解析——由插件自行决定格式）。 */
+  body: string
+}
+
+/** 插件数据响应（**纯数据**）。 */
+export interface PanelHttpResponse {
+  /** HTTP 状态码；非法值由宿主收敛为 500（不信任插件给的数字）。 */
+  status: number
+  /** 响应头（逐跳头 `content-length`/`transfer-encoding`/`connection` 由宿主丢弃）。 */
+  headers?: Record<string, string>
+  /** 响应体：文本或字节。 */
+  body: string | Buffer
+}
+
+/** 插件数据接口：宿主把 `/api/panel/<id>/*` 反代到这里。 */
+export type PanelRequestHandler = (req: PanelHttpRequest) => Promise<PanelHttpResponse> | PanelHttpResponse
+
 /** 动作分级：read 只读 / write 有副作用 / destructive 不可逆（需二次确认）。 */
 export type ActionLevel = 'read' | 'write' | 'destructive'
 
@@ -104,12 +152,22 @@ export interface PanelContribution {
   order?: number
   icon?: string
   description?: string
-  /** 取数：返回视图规格。宿主施加超时与错误隔离。 */
-  view: (params: Record<string, string>) => Promise<ViewSpec> | ViewSpec
+  /**
+   * 取数：返回视图规格。宿主施加超时与错误隔离。
+   * **可选**（§4.7）：只做自定义前端的插件可以不声明——宿主对它不代渲染（`view()` 返回降级态）。
+   */
+  view?: (params: Record<string, string>) => Promise<ViewSpec> | ViewSpec
   /** 可执行动作表。 */
   actions?: Record<string, ActionSpec>
   /** 自带视觉（可选）：accent 颜色 + 密度。宿主校验形状后落到该面板容器上。 */
   style?: PanelStyle
+  /** 插件自己的前端（静态资源 + 入口页）。缺省 = 宿主不给它托管资源。 */
+  frontend?: PanelFrontend
+  /**
+   * 插件自己的数据接口。宿主把 `/api/panel/<id>/*` 反代到它。
+   * **未声明 → 404（不回落、不猜测）**；声明了但不是函数 → 注册 fail-loud。
+   */
+  handle?: PanelRequestHandler
 }
 
 /** 注册表投影条目（/api/panel/registry 的元素）。 */
@@ -122,6 +180,11 @@ export interface PanelSummary {
   health: PanelHealth
   /** 面板自带视觉（原样投影；形状校验在注册时完成）。 */
   style?: PanelStyle
+  /**
+   * 前端接入声明（原样投影，**仅当贡献方声明了 `frontend` 时出现**——纯增量的可选字段）。
+   * 投影的是**声明值**，不是解析后的绝对路径（不把宿主磁盘布局泄漏到浏览器）。
+   */
+  frontend?: PanelFrontend
 }
 
 /** 贡献的实测健康快照（只由宿主写入）。 */

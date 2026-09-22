@@ -6,9 +6,11 @@
  * 慢面板会降级」，而不是靠线上撞运气（AGENTS.md §5.9 §2 尸体测试纪律）。
  */
 import type {
-  ActionLevel, ActionSpec, PanelContribution, PanelHealth, PanelHealthSnapshot, PanelStyle, PanelSummary,
-  ViewSpec,
+  ActionLevel, ActionSpec, PanelContribution, PanelFrontend, PanelHealth, PanelHealthSnapshot, PanelRequestHandler,
+  PanelStyle, PanelSummary, ViewSpec,
 } from './types.ts'
+import { resolveAssetsDir } from './frontend.ts'
+import type { PluginRootSource } from './frontend.ts'
 
 /** 面板 id 形状：小写字母/数字/连字符（与命名规范一致）。 */
 const PANEL_ID_RE = /^[a-z0-9][a-z0-9-]*$/
@@ -36,6 +38,38 @@ export function assertValidStyle(panelId: string, style: PanelStyle | undefined)
 
 /** 视图规格校验结果。 */
 export type ViewSpecCheck = { ok: true } | { ok: false; error: string }
+
+/**
+ * 校验前端接入声明（fail-loud，与 {@link assertValidStyle} 同风格）。
+ *
+ * 为什么非法值要抛而不是丢弃：`assetsDir` 写错（数字、空串）只有到请求 404 时才可见，
+ * 而那时人看到的是"资源没了"，不是"配置写错了"——注册期抛错把因果摆在一起。
+ * @throws frontend 不是对象，或 `assetsDir`/`entry` 不是非空字符串
+ */
+export function assertValidFrontend(panelId: string, frontend: PanelFrontend | undefined): void {
+  if (frontend === undefined) return
+  if (typeof frontend !== 'object' || frontend === null || Array.isArray(frontend)) {
+    throw new Error(`panel "${panelId}": illegal frontend（要求对象 { assetsDir?, entry? }）`)
+  }
+  if (frontend.assetsDir !== undefined && (typeof frontend.assetsDir !== 'string' || frontend.assetsDir === '')) {
+    throw new Error(`panel "${panelId}": illegal frontend.assetsDir "${String(frontend.assetsDir)}"（要求非空字符串）`)
+  }
+  if (frontend.entry !== undefined && (typeof frontend.entry !== 'string' || frontend.entry === '')) {
+    throw new Error(`panel "${panelId}": illegal frontend.entry "${String(frontend.entry)}"（要求非空字符串）`)
+  }
+}
+
+/**
+ * 校验数据接口声明（fail-loud）。`handle` 存在但不是函数 = 声明错误，
+ * 若不拦，症状会退化成"请求 404/500"，与"没声明"混成同一个现象（语义精确性）。
+ * @throws `handle` 存在但不是函数
+ */
+export function assertValidHandler(panelId: string, handle: PanelRequestHandler | undefined): void {
+  if (handle === undefined) return
+  if (typeof handle !== 'function') {
+    throw new Error(`panel "${panelId}": illegal handle（要求函数 (req) => Promise<{status, headers?, body}>）`)
+  }
+}
 
 /** 需要至少一个数组字段的块类型（渲染器没有它就只能画空）。 */
 const ARRAY_FIELDS: Record<string, string> = {
@@ -139,6 +173,15 @@ export interface RegistryEntry {
   contribution: PanelContribution
   registeredAt: string
   snapshot: PanelHealthSnapshot
+  /**
+   * 贡献方插件的**绝对根目录**（注册时刻解析一次并记下，见 `frontend.ts` 的选择理由）。
+   * 用途：解析相对 `frontend.assetsDir`、给出可审计的拒绝证据。
+   */
+  pluginRoot: string
+  /** 上面这个值由哪一级锚点得出（`caller-module` / `config-tree` / `cwd`）。 */
+  pluginRootSource: PluginRootSource
+  /** `frontend.assetsDir` 解析后的**绝对**静态根；未声明 `frontend` = null。 */
+  assetsRoot: string | null
 }
 
 /** 空健康快照（'unknown' = 还没有任何实测样本——不假装健康）。 */
@@ -260,9 +303,22 @@ export class PanelRegistry {
 
   /**
    * 注册一份贡献。
-   * @throws 当 id 非法或重复时抛错（fail-loud：面板身份是合成级契约，撞车 = 配置错误）
+   *
+   * `pluginRoot` 是**显式参数**而不是注册表自己猜的（AGENTS.md：默认值是显式 resolve 步骤）：
+   * 由 `PanelHost` 在注册时刻从**调用方上下文**（`ctx.baseUrl`）与调用栈推导后传进来，
+   * 解析结果随条目落档（`pluginRoot` / `pluginRootSource` / `assetsRoot`）——可审计、可断言。
+   * @param contribution - 贡献声明
+   * @param now - 注册时刻（ISO；时间由调用方注入以便测试）
+   * @param pluginRoot - 插件根绝对路径（缺省 `process.cwd()`，便于纯单测与旧调用点）
+   * @param pluginRootSource - 该根目录的来源
+   * @throws id 非法或重复、style 非法、frontend/handle 声明非法、相对 assetsDir 越出插件根
    */
-  register(contribution: PanelContribution, now: string): () => void {
+  register(
+    contribution: PanelContribution,
+    now: string,
+    pluginRoot: string = process.cwd(),
+    pluginRootSource: PluginRootSource = 'cwd',
+  ): () => void {
     if (!isValidPanelId(contribution.id)) {
       throw new Error(`panel: illegal id "${contribution.id}"（要求 ${String(PANEL_ID_RE)}）`)
     }
@@ -270,7 +326,20 @@ export class PanelRegistry {
       throw new Error(`panel: duplicate panel id "${contribution.id}"`)
     }
     assertValidStyle(contribution.id, contribution.style)
-    this.entries.set(contribution.id, { contribution, registeredAt: now, snapshot: emptySnapshot() })
+    assertValidFrontend(contribution.id, contribution.frontend)
+    assertValidHandler(contribution.id, contribution.handle)
+    const declared = contribution.frontend?.assetsDir
+    let assetsRoot: string | null = null
+    if (declared !== undefined) {
+      const assets = resolveAssetsDir(declared, pluginRoot)
+      if (!assets.ok) {
+        throw new Error(`panel "${contribution.id}": illegal frontend.assetsDir "${declared}"（${assets.reason}；pluginRoot=${pluginRoot}）`)
+      }
+      assetsRoot = assets.root
+    }
+    this.entries.set(contribution.id, {
+      contribution, registeredAt: now, snapshot: emptySnapshot(), pluginRoot, pluginRootSource, assetsRoot,
+    })
     this.failures.set(contribution.id, 0)
     return () => {
       this.entries.delete(contribution.id)
@@ -293,6 +362,7 @@ export class PanelRegistry {
         ...(e.contribution.icon === undefined ? {} : { icon: e.contribution.icon }),
         ...(e.contribution.description === undefined ? {} : { description: e.contribution.description }),
         ...(e.contribution.style === undefined ? {} : { style: e.contribution.style }),
+        ...(e.contribution.frontend === undefined ? {} : { frontend: e.contribution.frontend }),
         health: e.snapshot.health,
       }))
       .sort((a, b) => (a.order === b.order ? a.title.localeCompare(b.title) : a.order - b.order))

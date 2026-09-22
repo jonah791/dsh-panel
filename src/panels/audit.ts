@@ -14,7 +14,7 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AuditRecord } from '../audit.ts'
-import type { PanelContribution, Tone, ViewSpec } from '../types.ts'
+import type { PanelContribution, PanelHttpRequest, PanelHttpResponse, Tone, ViewSpec } from '../types.ts'
 
 /** 面板依赖：审计目录（`DSH_HOME/panel`）。 */
 export interface AuditDeps {
@@ -193,7 +193,32 @@ export function toAuditSpec(deps: AuditDeps, params: Record<string, string> = {}
 }
 
 /**
+ * `/api/panel/audit/*` 的数据接口（自带前端的取数通路，§4.7-3）。
+ *
+ * 纯数据契约：入参是宿主归一化后的请求（不碰 Node 原生 `req`/`res`），因此可离线单测。
+ * 未声明路径一律 404——面板不猜测、不回落（与 `planForward` 同精神）。
+ * @param deps - 审计目录
+ * @param req - 命名空间内请求（本面板只提供 `/records`）
+ */
+export function handleAuditRequest(deps: AuditDeps, req: PanelHttpRequest): PanelHttpResponse {
+  const json = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
+  // 只认 `/records`（忽略尾斜杠）：自带前端的取数面就是这一条，不做 REST 泛化。
+  if (req.path.replace(/\/+$/, '') !== '/records') {
+    return { status: 404, headers: json, body: JSON.stringify({ ok: false, error: `未知路径 ${req.path}（本面板只提供 /records）` }) }
+  }
+  const limit = parseLimit(req.query.limit)
+  const { records, corrupt, truncated, bytes } = readAudit(auditFileOf(deps), limit)
+  return { status: 200, headers: json, body: JSON.stringify({ ok: true, records, corrupt, truncated, bytes }) }
+}
+
+/**
  * 构造「面板审计」面板贡献（只读）。
+ *
+ * **自带前端**：本面板声明 `frontend` 后，入口卡片点进去加载
+ * `/panel-assets/audit/index.html`（宿主原样托管、不解析不注入），数据取自
+ * `/api/panel/audit/records`（本面板 `handle()` 应答）。选它当 §4.7 的通路正样本，
+ * 是因为它只读、职责单一，且恰好证明「中转站」对**内置面板**同样成立；
+ * 外壳仍保留「轻量模式」一键切换，原有 ViewSpec 渲染未被剥夺。
  * @param deps - 审计目录
  */
 export function createAuditPanel(deps: AuditDeps): PanelContribution {
@@ -204,6 +229,8 @@ export function createAuditPanel(deps: AuditDeps): PanelContribution {
     icon: 'history',
     description: '面板宿主的派发审计日志（谁在何时对哪个面板做了什么、结果如何）；只读，不提供改写通道',
     style: { accent: '#a78bfa' },
+    frontend: { assetsDir: 'web/audit', entry: 'index.html' },
+    handle: (req) => handleAuditRequest(deps, req),
     view: (params) => toAuditSpec(deps, params),
   }
 }

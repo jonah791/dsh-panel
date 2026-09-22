@@ -11,17 +11,23 @@
 
   为什么长这个样子（设计理由，不是复述代码）：
 
-  1. 展示层与数据层分离。宿主（Node 侧插件）在 /panel/ 托管本文件，页面只用
-     同源 fetch 调宿主的 JSON API，把宿主给的「视图规格（ViewSpec）」渲染成
-     界面。渲染逻辑全在浏览器，宿主换内容不必重新构建前端。
+  1. 宿主是**入口聚合器 + 中转站**，不是渲染器（主人 2026-09-22 定调：「面板插件
+     不是让前端格式锁死，而是因为需要聚合。各个插件前端都应该不同，就类似中转站」
+     「面板只是起前端按钮的聚合作用，别做成 tab 页了」）。所以本文件长这样：
+       · 首页 = **一屏入口卡片**（一屏列出全部贡献，按 order 排），**没有左侧导航**；
+       · 点卡片 = 加载**该插件自己的前端**：声明了 frontend.entry 的走
+         `<iframe src="/panel-assets/<id>/<entry>">`；没声明的**降级**为宿主轻量渲染；
+       · 两种模式都留返回入口（面包屑 + hash 路由 `#/`）——插件前端崩了也能退回一屏。
 
   2. 契约来源：docs/semantic.md
-       §4.2 视图规格（ViewSpec 白名单块）
+       §4.2 视图规格（ViewSpec 白名单块）——v0.5 起降级为**可选轻量模式**，块族全部保留
        §4.4 HTTP 面（/api/panel/registry | view | action | selfcheck）
        §4.5 失效与降级语义（单面板故障隔离、实测健康、degraded 而非转圈）
+       §4.7 前端接入契约（入口聚合 / 资源隔离 / 反代隔离）
      本文件只实现契约，不发明契约。文档里 actions 块的 items 曾写作 actionId[]，
      实现层同时兼容「字符串 actionId」与「{actionId,label,level} 对象」两种形态，
-     避免契约小版本漂移把界面打崩。
+     避免契约小版本漂移把界面打崩。注册表投影里的 frontend 字段目前**可能尚未投影**
+     （服务端在并行改动）——没有就按「没有」处理（一律轻量模式），不猜也不伪造路径。
 
   3. 零依赖（无 CDN / 外部字体 / 框架）：面板要能在离线、受限网络、无构建链的
      宿主里直接打开。
@@ -34,9 +40,13 @@
      · 本文件唯一允许 innerHTML 的位置是「我自己构造的固定骨架」并且插入值已
        转义——见 renderBlockUnknown（骨架固定，仅一个 kind 值经 escape 进入）。
        其余任何地方不得用 innerHTML 插值。
+     · iframe 只做路径映射：宿主**不解析、不注入、不重写**插件前端内容（§4.7）。
+       frontend.entry 在渲染层再验一次（只接受插件资源目录内的相对路径：无协议、
+       无绝对路径、无 .. 回溯、无查询串）——真正的拦截在服务端 /panel-assets/*。
 
   降级纪律（§4.5）：
-     · 单个面板 view() 失败 → 只有该面板显示降级态 + 重试，导航与外壳照常可用。
+     · 单个面板 view() 失败 → 只有该面板显示降级态 + 重试，入口与外壳照常可用。
+     · 插件前端加载超时 → 只提示 + 给「轻量模式」逃生通道，**不替插件判死**（慢 ≠ 坏）。
      · 失败语义看 payload.ok，不看 HTTP 状态码（宿主降级时 HTTP 仍可能是 200）。
   ============================================================================
 -->
@@ -177,32 +187,55 @@ button,input{font:inherit}
 
 /* 主布局 ------------------------------------------------------------- */
 .layout{flex:1 1 auto; display:flex; min-height:0}
-.nav{
-  width:200px;
-  flex:0 0 200px;
-  background:var(--nav-bg);
-  border-right:1px solid var(--border);
+
+/* 面包屑（只在该插件视图里出现；首页=入口聚合时隐藏） ----------------- */
+.crumb{display:flex; align-items:center; gap:10px; margin-bottom:10px; min-width:0}
+.crumb-icon{flex:0 0 auto; font-size:16px; line-height:1}
+.crumb-title{font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.crumb-tag{flex:0 0 auto; font-size:11px; color:var(--muted); border:1px solid var(--border); border-radius:999px; padding:0 8px; white-space:nowrap}
+.crumb-mode{margin-left:auto; flex:0 0 auto}
+
+/* 入口聚合（首页）：一屏卡片，不是左侧多页导航 ------------------------ */
+.cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px}
+.card{
   display:flex;
-  flex-direction:column;
-  min-height:0;
-}
-.nav-list{flex:1 1 auto; overflow-y:auto; overflow-x:hidden; padding:8px}
-.nav-foot{flex:0 0 auto; border-top:1px solid var(--border); padding:8px}
-.nav-item{
-  display:flex;
-  align-items:center;
-  gap:6px;
-  padding:6px 8px;
-  border-radius:6px;
+  align-items:flex-start;
+  gap:10px;
+  text-align:left;
+  font:inherit;
   color:var(--fg);
-  text-decoration:none;
-  font-size:13px;
-  transition:background var(--dur), color var(--dur);
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:12px;
+  cursor:pointer;
+  transition:background var(--dur), border-color var(--dur);
 }
-.nav-item:hover{background:var(--btn-hover)}
-.nav-item.active{background:var(--btn-hover); color:var(--accent)}
-.nav-title{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.nav-empty{padding:6px 8px 8px; color:var(--muted); font-size:12px; display:flex; flex-direction:column; gap:6px; align-items:flex-start}
+.card:hover{background:var(--btn-hover); border-color:var(--btn-hover-border)}
+.card:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+/* 图标位：panel.icon 是**语义名**（plug/history/users…），不是待显示的文本——
+   旧版导航从未渲染过它。直接当文字显示会逐字竖排（窄容器 + 20px 字号），
+   所以这里渲染成字母徽标：单个字符/非 ASCII 原样，ASCII 词取首字母（见 iconBadge）。 */
+.card-icon{flex:0 0 auto; display:flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:8px; background:var(--sunken); color:var(--muted); font-size:13px; font-weight:700; line-height:1}
+.card-main{flex:1 1 auto; display:flex; flex-direction:column; gap:3px; min-width:0}
+.card-head{display:flex; align-items:center; gap:6px; min-width:0}
+.card-title{font-size:14px; font-weight:600; overflow-wrap:anywhere}
+/* 描述统一截到两行：否则各卡片高度参差、网格看起来是歪的（真浏览器实测才发现） */
+.card-desc{font-size:12px; color:var(--muted); overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
+.card-foot{display:flex; align-items:center; gap:6px; margin-top:2px}
+.card-mode{font-size:11px; color:var(--muted); border:1px solid var(--border); border-radius:999px; padding:0 8px; white-space:nowrap}
+.card-warn{font-size:11px; color:var(--warn); white-space:nowrap}
+.board-note{color:var(--muted); font-size:12px; margin:10px 2px 0}
+
+/* 插件自带前端（iframe 占满内容区，内部自行滚动） --------------------- */
+.content.frame-mode{padding:0; overflow:hidden; display:flex; flex-direction:column}
+.frame-wrap{flex:1 1 auto; min-height:0; display:flex}
+.frame{flex:1 1 auto; width:100%; height:100%; border:0; display:block; background:var(--bg)}
+/* iframe 模式的高度必须沿 flex 链一路传下去：`.panel-body`（content 的直接子项）
+   没有任何样式 ⇒ 默认 flex:0 1 auto ⇒ 高度由内容决定，而 iframe 未定高时是浏览器默认的
+   150px，于是 frame-wrap/frame 上的 flex:1 全部落空。
+   真浏览器实测才暴露（content 753px / panel-body 150px / iframe 150px）——自写 DOM 桩无布局，测不出这类缺陷。 */
+.content.frame-mode .panel-body{flex:1 1 auto; min-height:0; display:flex; flex-direction:column}
 .dot{flex:0 0 auto; width:8px; height:8px; border-radius:50%; background:var(--muted)}
 .dot.tone-ok{background:var(--ok)}
 .dot.tone-warn{background:var(--warn)}
@@ -306,7 +339,7 @@ td.actions-cell .btn{margin-left:6px}
   overflow-wrap:anywhere;
 }
 
-/* 窄屏：导航折叠为顶部横向滚动条 ------------------------------------- */
+/* 窄屏：入口卡片单列 -------------------------------------------------- */
 /* ---------------------------------------------------------------------
    表现力扩展块（v0.5）：form / chart / log / progress / tabs
    全部零依赖（无框架、无 CDN、无外部字体），颜色一律过设计令牌。
@@ -383,26 +416,9 @@ td.actions-cell .btn{margin-left:6px}
 
 @media (max-width:720px){
   .layout{flex-direction:column}
-  .nav{
-    width:auto;
-    flex:0 0 auto;
-    flex-direction:row;
-    align-items:center;
-    border-right:none;
-    border-bottom:1px solid var(--border);
-  }
-  .nav-list{
-    display:flex;
-    gap:6px;
-    flex:1 1 auto;
-    overflow-x:auto;
-    overflow-y:hidden;
-    padding:6px 8px;
-  }
-  .nav-foot{border-top:none; padding:6px 8px; flex:0 0 auto}
-  .nav-item{white-space:nowrap; flex:0 0 auto}
-  .nav-empty{flex-direction:row; align-items:center; padding:4px 8px}
   .content{padding:12px}
+  .content.frame-mode{padding:0}
+  .cards{grid-template-columns:1fr}
   td .cell{max-width:200px}
 }
 </style>
@@ -435,12 +451,16 @@ td.actions-cell .btn{margin-left:6px}
 <div class="banners" id="banners"></div>
 
 <main class="layout">
-  <nav class="nav" id="nav">
-    <div class="nav-list" id="navList"></div>
-    <div class="nav-foot" id="navFoot"></div>
-  </nav>
   <section class="content" id="content">
-    <div class="panel-head">
+    <!-- 面包屑：进入插件视图后才有；#/（入口聚合首页）时隐藏 -->
+    <div class="crumb" id="crumb" hidden>
+      <button class="btn small" id="crumbBack" type="button" title="返回一屏入口">← 全部入口</button>
+      <span class="crumb-icon" id="crumbIcon"></span>
+      <span class="crumb-title" id="crumbTitle">—</span>
+      <span class="crumb-tag" id="crumbTag"></span>
+      <button class="btn small crumb-mode" id="crumbMode" type="button" hidden>轻量模式</button>
+    </div>
+    <div class="panel-head" id="panelHead">
       <h1 class="panel-title" id="panelTitle">—</h1>
       <span class="dur" id="panelDuration">—</span>
     </div>
@@ -456,12 +476,18 @@ td.actions-cell .btn{margin-left:6px}
      常量
      ================================================================== */
 
-  // 自检视图不是注册表里的面板，它是外壳自带的一项（要求 8）。
+  // 自检视图不是注册表里的面板，它是外壳自带的一项（要求 8）——入口页的最后一张卡片。
   var SELFCHECK_ID = '__selfcheck';
   var REFRESH_MS = 5000;
+  // 插件前端（iframe）加载看门狗：超时只提示 + 给「轻量模式」逃生通道，不替插件判死。
+  var FRAME_TIMEOUT_MS = 10000;
 
   var VALID_TONES = { ok: 1, warn: 1, bad: 1, muted: 1 };
   var HEALTH_TEXT = { ok: '健康', degraded: '降级', down: '不可用', unknown: '未知' };
+  // health（ok|degraded|down|unknown）与 tone（ok|warn|bad|muted）是两套词表：
+  // 老版导航把 health 直接喂给 toneClass，degraded/down 拿不到任何颜色类
+  // → 坏面板和未知面板看起来一样灰。这里做一次显式映射。
+  var HEALTH_TONE = { ok: 'ok', degraded: 'warn', down: 'bad', unknown: 'muted' };
   var LEVEL_TEXT = { read: '只读', write: '写入', destructive: '破坏性' };
 
   // 皮肤（设计自由层）：主题令牌切换 + 本机记忆 + URL 覆盖。
@@ -477,7 +503,11 @@ td.actions-cell .btn{margin-left:6px}
   var state = {
     panels: [],        // 注册表投影（已按 order 升序）
     host: null,
-    currentId: null,
+    currentId: null,   // null = 入口聚合首页（一屏卡片）
+    mode: 'home',      // home = 入口聚合 / panel = 某个插件的视图
+    frameId: null,     // 非 null = 该面板正以「插件自带前端」（iframe）呈现
+    liteIds: {},       // 面板 id → true：用户显式要求改用宿主轻量渲染（ViewSpec）
+    registryError: null, // 最近一次注册表加载失败的原因（首页据此画可重试的失败卡）
     autoRefresh: true,
     inflight: false,    // 同一时刻只允许一个视图请求在飞，防轮询堆叠
     pendingId: null,    // 在飞期间被挡下的目标面板：请求结束后补发，避免切面板被吞
@@ -488,6 +518,7 @@ td.actions-cell .btn{margin-left:6px}
     drafts: {}          // key: panelId|actionId → { 字段名: 值 }
   };
   var tickTimer = null;
+  var frameTimer = null;   // iframe 加载看门狗（离开视图必须清掉，否则横幅会在别的页面冒出来）
   var dom = {};
 
   /* ==================================================================
@@ -591,6 +622,12 @@ td.actions-cell .btn{margin-left:6px}
 
   function healthLabel(health) {
     return HEALTH_TEXT[health] || '未知';
+  }
+
+  // health → 视觉基调（查不到就用 muted，绝不把 health 词直接当 tone 类名）
+  function healthTone(health) {
+    var h = hasText(health) ? String(health) : 'unknown';
+    return HEALTH_TONE[h] || 'muted';
   }
 
   function levelLabel(level) {
@@ -1519,6 +1556,8 @@ td.actions-cell .btn{margin-left:6px}
 
   function renderPanelDegraded(panelId, message) {
     renderPanelShell(panelTitleOf(panelId), null);
+    renderCrumb(panelId, 'lite');
+    setFrameMode(false);
     clearPanelBody();
 
     var card = el('div', 'degraded');
@@ -1534,7 +1573,7 @@ td.actions-cell .btn{margin-left:6px}
   }
 
   /* ==================================================================
-     注册表 / 导航
+     注册表 / 入口聚合
      ================================================================== */
 
   function isKnownPanel(id) {
@@ -1555,75 +1594,219 @@ td.actions-cell .btn{margin-left:6px}
     return hasText(id) ? String(id) : '面板';
   }
 
-  function renderNav() {
-    dom.navList.textContent = '';
-    if (state.panels.length === 0) {
-      dom.navList.appendChild(el('div', 'nav-empty', '暂无已注册面板'));
-    } else {
-      for (var i = 0; i < state.panels.length; i++) {
-        var panel = state.panels[i];
-        var id = String(panel.id);
-        // `__` 前缀是宿主/外壳保留命名空间（如 __selfcheck）：导航只列真实面板贡献，
-        // 保留项由 navFoot 承载。旧版本服务端曾把它混进 panels，这里做一层防御性过滤。
-        if (id.indexOf('__') === 0) continue;
-        var title = hasText(panel.title) ? String(panel.title) : id;
-        var health = hasText(panel.health) ? String(panel.health) : 'unknown';
+  /* ------------------------------------------------------------------
+     入口聚合（首页）= 一屏卡片。这是主人 2026-09-22 定调的形态：
+     「面板只是起前端按钮的聚合作用，别做成 tab 页了」——左侧多页导航已删除。
+     ------------------------------------------------------------------ */
 
-        var link = el('a', 'nav-item');
-        link.href = '#/panel/' + encodeURIComponent(id);
-        link.setAttribute('data-panel-id', id);
-        link.title = title + '：健康 ' + healthLabel(health)
-          + (hasText(panel.description) ? ' · ' + String(panel.description) : '');
-        link.appendChild(el('span', 'nav-title', title));
-
-        // health 非 ok 才挂圆点：正常态不该有视觉噪音，异常态必须一眼可见
-        if (health !== 'ok') {
-          var dot = el('span', 'dot' + toneClass(health === 'unknown' ? 'muted' : health));
-          dot.title = '健康：' + healthLabel(health);
-          link.appendChild(dot);
-        }
-        dom.navList.appendChild(link);
-      }
+  // 前端接入（§4.7）：声明了 frontend.entry 的贡献用自己的前端，否则回落到轻量模式。
+  // 渲染层再验一次 entry 形状（不信任输入）：只接受插件资源目录内的相对路径——
+  // 无协议、无绝对路径、无 .. 回溯、无查询串/片段。真正的穿越拦截在服务端。
+  function frontendEntryOf(panel) {
+    if (!panel || typeof panel !== 'object') return null;
+    var fe = panel.frontend;
+    if (!fe || typeof fe !== 'object') return null;
+    var entry = hasText(fe.entry) ? String(fe.entry).trim() : '';
+    if (entry === '') return null;
+    if (/^[a-zA-Z][a-zA-Z0-9+.\-]*:/.test(entry)) return null;   // http: / data: / file: …
+    if (entry.charAt(0) === '/' || entry.indexOf('\\') >= 0) return null;
+    if (entry.indexOf('?') >= 0 || entry.indexOf('#') >= 0) return null;
+    var segs = entry.split('/');
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === '' || segs[i] === '.' || segs[i] === '..') return null;
     }
-    renderNavFoot();
+    return entry;
   }
 
-  function renderNavFoot() {
-    dom.navFoot.textContent = '';
-    var link = el('a', 'nav-item');
-    link.href = '#/panel/' + encodeURIComponent(SELFCHECK_ID);
-    link.setAttribute('data-panel-id', SELFCHECK_ID);
-    link.title = '宿主自检：版本 / 运行时长 / 各面板实测健康';
-    link.appendChild(el('span', 'nav-title', '宿主自检'));
-    dom.navFoot.appendChild(link);
-    updateNavActive();
+  // 「每个插件前端不同」的落点：路径由 id + entry 拼出，宿主不解析、不注入、不重写。
+  function frameUrl(panelId, entry) {
+    var path = String(entry).split('/').map(encodeURIComponent).join('/');
+    return '/panel-assets/' + encodeURIComponent(String(panelId)) + '/' + path;
   }
 
-  function renderNavError(message) {
-    dom.navList.textContent = '';
-    var box = el('div', 'nav-empty');
-    box.appendChild(el('div', null, '注册表加载失败'));
-    var detail = el('div', null, text(message, '未知错误'));
-    detail.title = text(message, '未知错误');
-    box.appendChild(detail);
-    var retry = el('button', 'btn small', '重试');
+  // `__` 前缀是宿主/外壳保留命名空间（如 __selfcheck）：入口只列真实贡献，
+  // 自检由外壳自己补一张尾卡（旧版本服务端曾把它混进 panels，这里再过滤一层）。
+  function contribPanels() {
+    return state.panels.filter(function (p) { return String(p.id).indexOf('__') !== 0; });
+  }
+
+  // health 非 ok 才挂状态点：正常态不该有视觉噪音，异常态必须一眼可见
+  function healthDot(health) {
+    var h = hasText(health) ? String(health) : 'unknown';
+    if (h === 'ok') return null;
+    var dot = el('span', 'dot tone-' + healthTone(h));
+    dot.title = '健康：' + healthLabel(h);
+    return dot;
+  }
+
+  // panel.icon 是**语义名**（plug/history/users…），旧版导航从未渲染过它。
+  // 卡片需要视觉锚点，但不能把语义名当文字显示（窄容器里会逐字竖排）：
+  // 非 ASCII（emoji/汉字）取一个字符原样，ASCII 短符号原样，ASCII 词取首字母做徽标
+  // ——对任意 icon 值都成立，不必维护映射表。
+  function iconBadge(icon, title) {
+    var raw = hasText(icon) ? String(icon).trim() : '';
+    if (raw === '') raw = hasText(title) ? String(title).trim() : '';
+    if (raw === '') return '▦';
+    // Array.from 而非 charAt(0)：emoji 是代理对，charAt 会截出半个字符
+    if (/[^\x20-\x7e]/.test(raw)) return Array.from(raw)[0];
+    if (raw.length <= 2) return raw;
+    return raw.charAt(0).toUpperCase();
+  }
+
+  function cardShell(id, iconText, title) {
+    var card = el('button', 'card');
+    card.type = 'button';
+    card.setAttribute('data-panel-id', id);
+    card.appendChild(el('span', 'card-icon', iconText));
+    var main = el('span', 'card-main');
+    var head = el('span', 'card-head');
+    head.appendChild(el('span', 'card-title', title));
+    main.appendChild(head);
+    card.appendChild(main);
+    return { card: card, main: main, head: head };
+  }
+
+  function panelCard(panel) {
+    var id = String(panel.id);
+    var title = hasText(panel.title) ? String(panel.title) : id;
+    var health = hasText(panel.health) ? String(panel.health) : 'unknown';
+    var desc = hasText(panel.description) ? String(panel.description) : '';
+    var entry = frontendEntryOf(panel);
+    var parts = cardShell(id, iconBadge(panel.icon, title), title);
+
+    parts.card.title = title + '：健康 ' + healthLabel(health)
+      + (entry !== null ? ' · 插件自带前端（' + entry + '）' : ' · 宿主轻量渲染')
+      + (desc === '' ? '' : ' · ' + desc);
+    var dot = healthDot(health);
+    if (dot) parts.head.appendChild(dot);
+    if (desc !== '') parts.main.appendChild(el('span', 'card-desc', desc));
+    var foot = el('span', 'card-foot');
+    foot.appendChild(el('span', 'card-mode', entry !== null ? '插件前端' : '轻量模式'));
+    // unknown = 宿主还没为它取过数（首页不再自动调每个面板的 view()）⇒ 不显示，
+    // 否则整屏都是"未知"这类噪音；degraded/down 才是需要一眼看见的异常。
+    if (health !== 'ok' && health !== 'unknown') foot.appendChild(el('span', 'card-warn', healthLabel(health)));
+    parts.main.appendChild(foot);
+
+    parts.card.addEventListener('click', function () { openPanel(id); });
+    return parts.card;
+  }
+
+  // 自检是外壳自带项（不来自注册表），永远作为最后一张卡——注册表挂了它也在。
+  function selfcheckCard() {
+    var parts = cardShell(SELFCHECK_ID, '🩺', '宿主自检');
+    parts.card.title = '宿主自检：版本 / 运行时长 / 各面板实测健康（外壳自带，不依赖注册表）';
+    parts.main.appendChild(el('span', 'card-desc', '宿主版本、运行时长与各面板实测健康'));
+    var foot = el('span', 'card-foot');
+    foot.appendChild(el('span', 'card-mode', '轻量模式'));
+    parts.main.appendChild(foot);
+    parts.card.addEventListener('click', function () { openPanel(SELFCHECK_ID); });
+    return parts.card;
+  }
+
+  function renderBoard() {
+    if (state.registryError !== null && state.panels.length === 0) {
+      renderBoardError(state.registryError);
+      return;
+    }
+    hideCrumb();
+    setFrameMode(false);
+    applyPanelStyle(null);   // 面板的 accent/density 不许漏到首页（applyPanelStyle(null) = 复位）
+    renderPanelShell('全部入口', null);
+    dom.panelDuration.textContent = contribPanels().length + ' 个入口';
+    clearPanelBody();
+
+    var list = contribPanels();
+    var grid = el('div', 'cards');
+    for (var i = 0; i < list.length; i++) grid.appendChild(panelCard(list[i]));
+    grid.appendChild(selfcheckCard());   // 自检：永远最后一张
+    dom.panelBody.appendChild(grid);
+    dom.panelBody.appendChild(el('div', 'board-note',
+      '点卡片进入该插件自己的前端（iframe /panel-assets/<id>/<entry>）；'
+      + '未声明 frontend.entry 的贡献由宿主以「轻量模式」渲染 ViewSpec。'));
+  }
+
+  // 注册表挂了也要能干活：失败画成一张可重试的卡 + 自检卡（自检不依赖注册表）
+  function renderBoardError(message) {
+    hideCrumb();
+    setFrameMode(false);
+    applyPanelStyle(null);
+    renderPanelShell('全部入口', null);
+    dom.panelDuration.textContent = '—';
+    clearPanelBody();
+
+    var card = el('div', 'degraded');
+    card.appendChild(el('div', 'degraded-title', '⚠ 注册表加载失败'));
+    card.appendChild(el('div', 'degraded-msg', text(message, '未知错误')));
+    var retry = el('button', 'btn', '重试');
     retry.type = 'button';
     retry.addEventListener('click', function () { loadRegistry(); });
-    box.appendChild(retry);
-    dom.navList.appendChild(box);
+    card.appendChild(retry);
+    dom.panelBody.appendChild(card);
+
+    var grid = el('div', 'cards');
+    grid.appendChild(selfcheckCard());
+    dom.panelBody.appendChild(grid);
   }
 
-  function updateNavActive() {
-    var items = dom.navList.querySelectorAll('.nav-item');
-    for (var i = 0; i < items.length; i++) {
-      if (items[i].getAttribute('data-panel-id') === state.currentId) items[i].classList.add('active');
-      else items[i].classList.remove('active');
+  /* ------------------------------------------------------------------
+     面包屑：视图里的返回入口 + 模式标识（插件前端 / 轻量模式）
+     ------------------------------------------------------------------ */
+
+  function renderCrumb(id, modeValue) {
+    var isSelf = id === SELFCHECK_ID;
+    var meta = panelMetaOf(id);
+    var entry = frontendEntryOf(meta);
+    var health = (meta && hasText(meta.health)) ? String(meta.health) : '';
+
+    // 与卡片同一套：icon 是语义名，取字母徽标（旧写法直接把 'history' 当文字显示）
+    dom.crumbIcon.textContent = isSelf ? '🩺' : iconBadge(meta ? meta.icon : null, panelTitleOf(id));
+    dom.crumbTitle.textContent = panelTitleOf(id);
+    var tag = (modeValue === 'frame') ? '插件前端' : '轻量模式';
+    // unknown 与 ok 一样不缀（宿主尚未取数 ≠ 异常），否则标题旁恒挂一个「· 未知」
+    if (!isSelf && health !== '' && health !== 'ok' && health !== 'unknown') tag += ' · ' + healthLabel(health);
+    dom.crumbTag.textContent = tag;
+
+    // 模式切换按钮只在「该贡献确实声明了前端」时才出现——否则那是个假按钮
+    if (!isSelf && entry !== null) {
+      var isFrame = (modeValue === 'frame');
+      dom.crumbMode.hidden = false;
+      dom.crumbMode.textContent = isFrame ? '轻量模式' : '插件前端';
+      dom.crumbMode.title = isFrame
+        ? '改用宿主轻量渲染（ViewSpec）'
+        : '改用插件自带前端（' + frameUrl(id, entry) + '）';
+    } else {
+      dom.crumbMode.hidden = true;
+      dom.crumbMode.removeAttribute('title');
     }
-    var footItems = dom.navFoot.querySelectorAll('.nav-item');
-    for (var j = 0; j < footItems.length; j++) {
-      if (state.currentId === SELFCHECK_ID) footItems[j].classList.add('active');
-      else footItems[j].classList.remove('active');
+    dom.crumb.hidden = false;
+  }
+
+  function hideCrumb() {
+    if (dom.crumb) dom.crumb.hidden = true;
+    if (dom.crumbMode) dom.crumbMode.hidden = true;
+  }
+
+  // iframe 模式：内容区不再滚动，改由插件前端自己滚（§4.7：宿主不碰它内部）
+  function setFrameMode(on) {
+    if (dom.content) dom.content.classList.toggle('frame-mode', on === true);
+    if (dom.panelHead) dom.panelHead.hidden = (on === true);
+  }
+
+  function stopFrameWatch() {
+    if (frameTimer !== null) {
+      window.clearTimeout(frameTimer);
+      frameTimer = null;
     }
+  }
+
+  // 模式切换留双门：插件前端 → 宿主轻量渲染，或反向（前端没声明就没这门）
+  function toggleFrameMode() {
+    var id = state.currentId;
+    if (!hasText(id) || id === SELFCHECK_ID) return;
+    if (frontendEntryOf(panelMetaOf(id)) === null) return;
+    if (state.frameId === id) state.liteIds[id] = true;
+    else delete state.liteIds[id];
+    return loadView(id);
   }
 
   async function loadRegistry() {
@@ -1648,15 +1831,20 @@ td.actions-cell .btn{margin-left:6px}
       dom.hostVersion.textContent = (state.host && hasText(state.host.version))
         ? '宿主 v' + String(state.host.version)
         : '宿主版本 —';
-      renderNav();
+      state.registryError = null;
       clearBanner('registry');
+      // 首页的内容就是注册表投影，刷新它等于刷新首页；视图里只更新面包屑的元信息
+      if (state.mode === 'home') renderBoard();
+      else renderCrumb(state.currentId, state.frameId === state.currentId ? 'frame' : 'lite');
       return true;
     } catch (e) {
       var msg = e && e.message ? e.message : String(e);
-      renderNavError(msg);
-      renderNavFoot();   // 注册表挂了，自检入口仍必须可用
+      state.registryError = msg;
       setBanner('registry', 'bad', '注册表加载失败：' + msg);
       if (state.host === null) dom.hostVersion.textContent = '宿主版本 —';
+      // 首页：把失败画成可重试的卡（自检卡仍在，它不依赖注册表）。
+      // 视图里只挂横幅——view 是另一条接口，可能照常可用；且「← 全部入口」一直在面包屑上。
+      if (state.mode === 'home') renderBoard();
       return false;
     }
   }
@@ -1675,6 +1863,9 @@ td.actions-cell .btn{margin-left:6px}
     }
     state.inflight = true;
     state.pendingId = null;
+    stopFrameWatch();        // 换视图先撤掉上一帧的加载看门狗
+    clearBanner('frame');    // 上一帧若已超时报警，横幅属于上一帧，跟着走
+    state.frameId = null;    // 默认轻量；renderFrame 会把它设成当前 id
     try {
       if (id === SELFCHECK_ID) {
         await loadSelfcheck();
@@ -1685,27 +1876,12 @@ td.actions-cell .btn{margin-left:6px}
         return;
       }
 
-      clearBanner('degraded');
-      try {
-        var data = await api('/api/panel/view?id=' + encodeURIComponent(id));
-        // 竞态保护：请求在飞时用户切了面板，旧结果不得覆盖新视图
-        if (state.currentId !== id) return;
-
-        if (!data || data.ok !== true) {
-          renderPanelDegraded(id, text(data && data.error, '宿主未返回错误详情'));
-          return;
-        }
-        var blocks = (data.spec && Array.isArray(data.spec.blocks)) ? data.spec.blocks : [];
-        renderPanel(id, data, blocks);
-        if (data.degraded === true) {
-          setBanner('degraded', 'warn',
-            '面板降级运行：宿主标记 degraded（durationMs '
-            + (typeof data.durationMs === 'number' ? Math.round(data.durationMs) : '缺失') + '）');
-        }
-      } catch (e) {
-        if (state.currentId !== id) return;
-        renderPanelDegraded(id, e && e.message ? e.message : String(e));
+      var entry = frontendEntryOf(panelMetaOf(id));
+      if (entry !== null && state.liteIds[id] !== true) {
+        renderFrame(id, entry);     // 插件自己的前端（§4.7）
+        return;
       }
+      await loadLiteView(id);       // 没声明前端（或用户选了轻量）：宿主代渲染
     } finally {
       state.inflight = false;
       var queued = state.pendingId;
@@ -1719,11 +1895,80 @@ td.actions-cell .btn{margin-left:6px}
     }
   }
 
+  // 轻量模式：宿主按 §4.2 白名单块代渲染（v0.5 起不再是唯一形态，但**继续为既有贡献保留**）
+  async function loadLiteView(id) {
+    state.frameId = null;
+    clearBanner('degraded');
+    clearBanner('frame');
+    try {
+      var data = await api('/api/panel/view?id=' + encodeURIComponent(id));
+      // 竞态保护：请求在飞时用户切了面板，旧结果不得覆盖新视图
+      if (state.currentId !== id) return;
+
+      if (!data || data.ok !== true) {
+        renderPanelDegraded(id, text(data && data.error, '宿主未返回错误详情'));
+        return;
+      }
+      var blocks = (data.spec && Array.isArray(data.spec.blocks)) ? data.spec.blocks : [];
+      renderPanel(id, data, blocks);
+      if (data.degraded === true) {
+        setBanner('degraded', 'warn',
+          '面板降级运行：宿主标记 degraded（durationMs '
+          + (typeof data.durationMs === 'number' ? Math.round(data.durationMs) : '缺失') + '）');
+      }
+    } catch (e) {
+      if (state.currentId !== id) return;
+      renderPanelDegraded(id, e && e.message ? e.message : String(e));
+    }
+  }
+
+  // 插件自带前端：iframe 指向 /panel-assets/<id>/<entry>，占满内容区、无边框、内部自行滚动。
+  // 宿主不解析、不注入、不重写它（§4.7）——所以这里只做路径映射 + 一个加载看门狗。
+  function renderFrame(id, entry) {
+    var title = panelTitleOf(id);
+    var url = frameUrl(id, entry);
+    state.frameId = id;
+    renderPanelShell(title, null);
+    applyPanelStyle(id);
+    renderCrumb(id, 'frame');
+    setFrameMode(true);
+    clearPanelBody();
+    clearBanner('degraded');
+
+    var wrap = el('div', 'frame-wrap');
+    var frame = document.createElement('iframe');
+    frame.className = 'frame';
+    frame.setAttribute('title', title);
+    frame.setAttribute('loading', 'eager');
+    frame.src = url;
+
+    // 看门狗：超时只提示 + 指向逃生通道，**不替插件判死**（慢 ≠ 坏，有些前端要自己拉数据）。
+    // load 事件若从不触发（404 也可能触发 load），到点提醒主人这里有异常。
+    var settled = false;
+    frameTimer = window.setTimeout(function () {
+      frameTimer = null;
+      if (settled) return;
+      setBanner('frame', 'warn',
+        '插件前端加载超时（>' + Math.round(FRAME_TIMEOUT_MS / 1000) + 's）：' + url
+        + '。若资源不存在，可用面包屑上的「轻量模式」改由宿主渲染。');
+    }, FRAME_TIMEOUT_MS);
+    frame.addEventListener('load', function () {
+      settled = true;
+      stopFrameWatch();
+      clearBanner('frame');
+    });
+
+    wrap.appendChild(frame);
+    dom.panelBody.appendChild(wrap);
+  }
+
   function renderPanel(id, data, blocks) {
     var title = panelTitleOf(id);
     var durationMs = (typeof data.durationMs === 'number') ? data.durationMs : null;
     renderPanelShell(title, durationMs);
     applyPanelStyle(id);
+    renderCrumb(id, 'lite');
+    setFrameMode(false);
     if (hasText(data.generatedAt)) {
       dom.panelDuration.title = '生成时间：' + fmtTime(data.generatedAt);
     }
@@ -1737,30 +1982,38 @@ td.actions-cell .btn{margin-left:6px}
     dom.panelBody.appendChild(renderBlocks(blocks, ctx));
   }
 
+  // 首页与「插件自带前端」都只需要注册表（后者有自己的刷新节奏，宿主不代它重载 iframe）；
+  // 只有轻量模式要重取 ViewSpec。
   function refreshCurrent() {
+    var frameShown = state.currentId !== null && state.frameId === state.currentId;
+    if (state.mode === 'home' || frameShown) return loadRegistry();
     return loadView(state.currentId);
   }
 
-  function switchPanel(id) {
+  function openPanel(id) {
     state.currentId = id;
-    updateNavActive();
+    state.mode = 'panel';
+    state.frameId = null;
     renderPanelShell(panelTitleOf(id), null);
     clearPanelBody();
     updateHash(id);
     return loadView(id);
   }
 
-  function readHashPanelId() {
+  // 路由：`#/` = 入口聚合（首页），`#/panel/<id>` = 某个插件的视图（含 __selfcheck）。
+  // 保留既有 hash 形态，链接仍可分可复现。
+  function readRoute() {
     var hash = String(window.location.hash || '');
+    if (hash === '' || hash === '#' || hash === '#/') return { kind: 'home', id: null };
     var m = /^#\/panel\/(.+)$/.exec(hash);
-    if (!m) return null;
+    if (!m) return null;    // 认不出就不动：保持当前视图，不白屏
     var id = m[1];
     try {
       id = decodeURIComponent(id);
     } catch (e) {
       // 非法百分号编码：按原文处理，交给「面板不存在」路径，不抛错
     }
-    return id === '' ? null : id;
+    return id === '' ? { kind: 'home', id: null } : { kind: 'panel', id: id };
   }
 
   function updateHash(id) {
@@ -1768,10 +2021,29 @@ td.actions-cell .btn{margin-left:6px}
     if (String(window.location.hash) !== target) window.location.hash = target;
   }
 
+  function updateHashHome() {
+    if (String(window.location.hash) !== '#/') window.location.hash = '#/';
+  }
+
+  function showHome() {
+    stopFrameWatch();
+    clearBanner('frame');    // 帧加载超时横幅不跟着首页走
+    state.currentId = null;
+    state.mode = 'home';
+    state.frameId = null;
+    updateHashHome();
+    renderBoard();
+  }
+
   function onHashChange() {
-    var id = readHashPanelId();
-    if (!id || id === state.currentId) return;
-    switchPanel(id);
+    var route = readRoute();
+    if (route === null) return;
+    if (route.kind === 'home') {
+      if (state.mode !== 'home') showHome();
+      return;
+    }
+    if (route.id === state.currentId) return;
+    openPanel(route.id);
   }
 
   /* ==================================================================
@@ -1841,6 +2113,8 @@ td.actions-cell .btn{margin-left:6px}
     ];
 
     renderPanelShell('宿主自检', null);
+    renderCrumb(SELFCHECK_ID, 'lite');
+    setFrameMode(false);
     clearPanelBody();
     dom.panelBody.appendChild(renderBlocks(blocks, {
       panelId: SELFCHECK_ID,
@@ -1868,11 +2142,16 @@ td.actions-cell .btn{margin-left:6px}
 
   // 用户正在面板里编辑（输入框/文本域/下拉聚焦中）→ 本轮自动刷新跳过。
   // 理由：刷新会重建面板 DOM，抢走焦点与未提交的输入；宁可晚 5 秒更新数据。
+  // 首页的卡片也是按钮：焦点停在某张卡上时同样跳过（5 秒重建会把键盘焦点扔掉，
+  // Tab 导航时尤其明显）。视图里的动作按钮**不**受此保护——否则一次点击就会把
+  // 轮询冻住到下次失焦，那是拿一个坏换另一个坏。
   function userIsEditing() {
     var active = document.activeElement;
     if (!active || !dom.panelBody) return false;
     var tag = String(active.tagName || '').toUpperCase();
-    if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') return false;
+    var isField = (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT');
+    var isBoardCard = (state.mode === 'home' && tag === 'BUTTON');
+    if (!isField && !isBoardCard) return false;
     return dom.panelBody.contains(active);
   }
 
@@ -1899,16 +2178,13 @@ td.actions-cell .btn{margin-left:6px}
     // 这里早退会让「轮询在飞时点刷新」变成毫无反馈的死按钮。
     await loadRegistry();
 
+    if (state.mode === 'home') return true;   // 首页内容就是注册表投影，已经重画过了
+
     var id = state.currentId;
     if (id && id !== SELFCHECK_ID && !isKnownPanel(id)) {
-      // 面板在注册表里消失了（插件被卸载/禁用）：退回可用视图，而不是白屏
-      if (state.panels.length > 0) {
-        var first = String(state.panels[0].id);
-        updateHash(first);
-        return switchPanel(first);
-      }
-      updateHash(SELFCHECK_ID);
-      return switchPanel(SELFCHECK_ID);
+      // 面板在注册表里消失了（插件被卸载/禁用）：退回入口聚合，而不是停在死面板或白屏
+      showHome();
+      return true;
     }
     return refreshCurrent();
   }
@@ -1935,8 +2211,13 @@ td.actions-cell .btn{margin-left:6px}
 
   function cacheDom() {
     dom.banners = document.getElementById('banners');
-    dom.navList = document.getElementById('navList');
-    dom.navFoot = document.getElementById('navFoot');
+    dom.crumb = document.getElementById('crumb');
+    dom.crumbBack = document.getElementById('crumbBack');
+    dom.crumbIcon = document.getElementById('crumbIcon');
+    dom.crumbTitle = document.getElementById('crumbTitle');
+    dom.crumbTag = document.getElementById('crumbTag');
+    dom.crumbMode = document.getElementById('crumbMode');
+    dom.panelHead = document.getElementById('panelHead');
     dom.panelTitle = document.getElementById('panelTitle');
     dom.panelDuration = document.getElementById('panelDuration');
     dom.panelBody = document.getElementById('panelBody');
@@ -1954,6 +2235,13 @@ td.actions-cell .btn{margin-left:6px}
     window.addEventListener('unhandledrejection', onUnhandledRejection);
 
     dom.refreshBtn.addEventListener('click', function () { refreshAll(); });
+
+    if (dom.crumbBack) {
+      dom.crumbBack.addEventListener('click', function () { showHome(); });
+    }
+    if (dom.crumbMode) {
+      dom.crumbMode.addEventListener('click', function () { toggleFrameMode(); });
+    }
 
     if (dom.themeSelect) {
       dom.themeSelect.addEventListener('change', function () {
@@ -1978,16 +2266,13 @@ td.actions-cell .btn{margin-left:6px}
     applyTheme(resolveTheme(), false);   // 首屏前定皮肤：先上令牌再拉数据，避免闪一下默认色
     await loadRegistry();
 
-    var hashed = readHashPanelId();
-    if (hashed && (hashed === SELFCHECK_ID || isKnownPanel(hashed))) {
-      switchPanel(hashed);          // 分享/刷新的 hash 优先，保持链接可复现
-    } else if (state.panels.length > 0) {
-      var first = String(state.panels[0].id);
-      updateHash(first);
-      switchPanel(first);
+    // 默认落点 = 入口聚合（一屏卡片），**不再自动进第一个面板**：
+    // 分享/刷新的 hash 优先（`#/panel/<id>` 直接进那个视图，保持链接可复现）。
+    var route = readRoute();
+    if (route !== null && route.kind === 'panel' && (route.id === SELFCHECK_ID || isKnownPanel(route.id))) {
+      openPanel(route.id);
     } else {
-      updateHash(SELFCHECK_ID);     // 没有可用面板时，自检视图是最后一块可用的地板
-      switchPanel(SELFCHECK_ID);
+      showHome();
     }
 
     state.autoRefresh = dom.autoRefresh.checked === true;

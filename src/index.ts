@@ -16,19 +16,21 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import z from '@deepseek-ai/schemastery'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { PanelHost } from './host.ts'
+import { PanelHost, withTimeout } from './host.ts'
+import { appendAudit } from './audit.ts'
+import { contentTypeFor, decodeRequestPath, planForward, resolvePanelAsset, splitPanelPath } from './frontend.ts'
 import { createPluginManagerPanel } from './panels/plugin-manager.ts'
 import type { PluginManagerDeps } from './panels/plugin-manager.ts'
 import { createTaskboardPanel } from './panels/taskboard.ts'
 import { createAuditPanel } from './panels/audit.ts'
 import { createGrowthProfilePanel } from './panels/growth-profile.ts'
 import { createAgentTeamsPanel } from './panels/agent-teams.ts'
-import type { ViewSpec } from './types.ts'
+import type { PanelHttpResponse, ViewSpec } from './types.ts'
 
 /** 宿主版本（自检面板与 registry 展示，与 package.json 同步维护）。 */
 export const VERSION = '0.4.0'
@@ -129,6 +131,62 @@ function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   })
 }
 
+/** 中转请求体上限（字符）：插件数据接口是给自家前端用的，不需要更大的入口。 */
+const RELAY_BODY_MAX = 1_000_000
+
+/**
+ * 读**原始**请求体（中转用：插件数据接口不假设 JSON，所以不能复用 {@link readBody}）。
+ * 与 readBody 的差别：超限时**结算 promise**（拒绝），不让请求悬挂。
+ * @param req - 请求
+ * @returns 请求体原文
+ */
+function readRawBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    let body = ''
+    let settled = false
+    req.on('data', (chunk: Buffer) => {
+      if (settled) return
+      body += chunk.toString('utf8')
+      if (body.length > RELAY_BODY_MAX) {
+        settled = true
+        reject(new Error(`请求体超过上限 ${String(RELAY_BODY_MAX)} 字符`))
+      }
+    })
+    req.on('end', () => { if (!settled) { settled = true; resolvePromise(body) } })
+    req.on('error', (error) => { if (!settled) { settled = true; reject(error) } })
+  })
+}
+
+/** Node 请求头 → 纯字符串表（键小写；数组值以 `, ` 连接）。 */
+function flattenHeaders(headers: NodeJS.Dict<string | string[]>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(headers)) {
+    if (value === undefined) continue
+    out[key.toLowerCase()] = Array.isArray(value) ? value.join(', ') : value
+  }
+  return out
+}
+
+/**
+ * 把插件返回的信封写回响应。
+ * 纪律：逐跳头（`content-length`/`transfer-encoding`/`connection`）由宿主丢弃——插件不得自定分块；
+ * 状态码不合法收敛为 500（不信任插件给的数字）；未给 `cache-control` 时默认 `no-store`（面板是活数据）。
+ * @param res - 响应
+ * @param out - 插件返回的 `{status, headers?, body}`
+ */
+function writeRelayResponse(res: ServerResponse, out: PanelHttpResponse): void {
+  const headers: Record<string, string> = {}
+  for (const [key, value] of Object.entries(out.headers ?? {})) {
+    const lower = key.toLowerCase()
+    if (lower === 'content-length' || lower === 'transfer-encoding' || lower === 'connection') continue
+    if (typeof value === 'string') headers[lower] = value
+  }
+  headers['cache-control'] ??= 'no-store'
+  const status = Number.isInteger(out.status) && out.status >= 100 && out.status <= 599 ? out.status : 500
+  res.writeHead(status, headers)
+  res.end(typeof out.body === 'string' ? Buffer.from(out.body, 'utf8') : out.body)
+}
+
 /** 自检面板（宿主内置，id 固定，不参与注册表避免自指递归）。 */
 function selfcheckSpec(host: PanelHost): ViewSpec {
   const info = host.hostInfo()
@@ -186,11 +244,13 @@ export function apply(ctx: Context, config: Config): void {
   if (!config.enabled) return
   const dh = dshHomeOf(config)
   const startedAt = new Date().toISOString()
+  /** 审计目录（DSH_HOME/panel）——派发审计与中转拒绝审计共用同一份证据。 */
+  const panelDir = join(dh, 'panel')
 
   const host = new PanelHost(ctx, {
     viewTimeoutMs: config.viewTimeoutMs,
     actionTimeoutMs: config.actionTimeoutMs,
-    auditDir: join(dh, 'panel'),
+    auditDir: panelDir,
     slowMs: 1000,
     version: VERSION,
     startedAt,
@@ -215,7 +275,7 @@ export function apply(ctx: Context, config: Config): void {
 
   // 内置面板 #5：面板审计（只读）——把宿主自己的派发审计（DSH_HOME/panel/audit.jsonl）
   // 变成可看的一页：安全机制不可观测时，无人能回答「它到底拦了什么」。
-  ctx.effect(() => host.register(createAuditPanel({ panelDir: join(dh, 'panel') })), 'dsh-panel: builtin audit')
+  ctx.effect(() => host.register(createAuditPanel({ panelDir })), 'dsh-panel: builtin audit')
 
   // ---------- 页面 ----------
   const serveShell = (_req: IncomingMessage, res: ServerResponse): void => {
@@ -254,6 +314,111 @@ export function apply(ctx: Context, config: Config): void {
       res.writeHead(404); res.end()
     },
   }), 'dsh-panel: /panel/assets')
+
+  // ---------- 插件前端中转（v0.5「中转站」：静态托管 + 数据反代） ----------
+  // 语义文档 §4.7：宿主的三件事只有「给入口（一屏聚合，归外壳）、托管插件静态资源、反代插件数据请求」。
+  // 前端形态归插件——宿主不解析、不注入、不重写它托管的内容，只做路径映射与转发。
+
+  /**
+   * 中转拒绝/失败的审计。**成功的中转请求不写**——审计是证据，不是访问日志
+   * （否则每个静态资源请求都会把 audit.jsonl 淹掉）。
+   */
+  const auditRelay = (panelId: string, actionId: string, outcome: 'denied' | 'error' | 'timeout', reason: string, message: string): void => {
+    const written = appendAudit(panelDir, {
+      at: new Date().toISOString(), panelId, actionId, level: 'read', paramsDigest: null,
+      outcome, reason, durationMs: 0, message,
+    })
+    if (!written) logger.warn(`面板审计写入失败：${panelId}·${actionId}（${reason}）`)
+  }
+
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'prefix',
+    path: '/panel-assets',
+    handler: (req: IncomingMessage, res: ServerResponse) => {
+      const decoded = decodeRequestPath(new URL(req.url ?? '/', 'http://x').pathname)
+      if (!decoded.ok) { res.writeHead(400); res.end(); return }
+      const parts = splitPanelPath(decoded.path, '/panel-assets')
+      if (parts === undefined) { res.writeHead(404); res.end(); return }
+      const entry = host.panel(parts.id)
+      if (entry === undefined) {
+        auditRelay(parts.id, 'panel-assets', 'denied', 'unknown-panel', `未知面板 ${parts.id}（请求 ${decoded.path}）`)
+        res.writeHead(404); res.end(); return
+      }
+      // 空路径 = 请求入口页。**只在该插件声明了 entry 时兜底**——宿主不猜 `index.html`（不回落、不猜测）。
+      const rel = parts.rest === '' ? (entry.contribution.frontend?.entry ?? '') : parts.rest
+      const target = resolvePanelAsset(entry.assetsRoot, rel)
+      if (!target.ok) {
+        auditRelay(parts.id, 'panel-assets', 'denied', target.reason,
+          `拒绝 ${req.method ?? 'GET'} ${decoded.path}（assetsRoot=${entry.assetsRoot ?? '未声明 frontend'}）`)
+        res.writeHead(target.status); res.end(); return
+      }
+      if (!existsSync(target.file)) {
+        auditRelay(parts.id, 'panel-assets', 'denied', 'missing-file', `缺失 ${target.file}`)
+        res.writeHead(404); res.end(); return
+      }
+      try {
+        if (!statSync(target.file).isFile()) {
+          auditRelay(parts.id, 'panel-assets', 'denied', 'not-a-file', `非常规文件 ${target.file}`)
+          res.writeHead(404); res.end(); return
+        }
+        const body = readFileSync(target.file)
+        res.writeHead(200, { 'content-type': contentTypeFor(target.file), 'cache-control': 'no-store' })
+        res.end(body)
+      } catch (e) {
+        auditRelay(parts.id, 'panel-assets', 'error', 'read-failed', `${target.file} — ${String(e)}`)
+        res.writeHead(500); res.end()
+      }
+    },
+  }), 'dsh-panel: /panel-assets/<id>/*')
+
+  // 任意方法的插件数据接口。保留路径（registry / view / action / selfcheck）由上面那些 **exact** 路由先匹配
+  // ——webserver 的匹配顺序是「exact 表优先，其次最长前缀」，所以本路由不会遮住既有 API。
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'prefix',
+    path: '/api/panel',
+    handler: async (req: IncomingMessage, res: ServerResponse) => {
+      try {
+        const url = new URL(req.url ?? '/', 'http://x')
+        const decoded = decodeRequestPath(url.pathname)
+        if (!decoded.ok) {
+          json(res, 400, { ok: false, status: 400, error: `路径编码非法（${decoded.reason}）` })
+          return
+        }
+        const parts = splitPanelPath(decoded.path, '/api/panel')
+        if (parts === undefined) {
+          json(res, 404, { ok: false, status: 404, error: '未知面板' })
+          return
+        }
+        const plan = planForward(host.panel(parts.id)?.contribution, parts.id)
+        if (plan.kind === 'reject') {
+          auditRelay(parts.id, 'panel-api', 'denied', plan.reason, `${req.method ?? 'GET'} ${decoded.path} — ${plan.message}`)
+          json(res, plan.status, { ok: false, status: plan.status, error: plan.message })
+          return
+        }
+        const query: Record<string, string> = {}
+        for (const [key, value] of url.searchParams) query[key] = value
+        const body = await readRawBody(req)
+        const result = await withTimeout(() => plan.handle({
+          method: req.method ?? 'GET',
+          path: '/' + parts.rest,
+          query,
+          headers: flattenHeaders(req.headers),
+          body,
+        }), config.actionTimeoutMs)
+        if (!result.ok) {
+          const timedOut = result.timedOut
+          const error = timedOut ? `插件 handle 超时（>${String(config.actionTimeoutMs)}ms）` : String(result.error)
+          auditRelay(parts.id, 'panel-api', timedOut ? 'timeout' : 'error', timedOut ? 'timeout' : 'handle-failed',
+            `${req.method ?? 'GET'} ${decoded.path} — ${error}`)
+          json(res, timedOut ? 504 : 502, { ok: false, status: timedOut ? 504 : 502, error })
+          return
+        }
+        writeRelayResponse(res, result.value)
+      } catch (e) {
+        json(res, 500, { ok: false, status: 500, error: String(e) })
+      }
+    },
+  }), 'dsh-panel: /api/panel/<id>/*')
 
   // ---------- API ----------
   ctx.effect(() => ctx.webServer.register({
