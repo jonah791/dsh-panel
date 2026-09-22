@@ -328,6 +328,14 @@ export class PanelRegistry {
     assertValidStyle(contribution.id, contribution.style)
     assertValidFrontend(contribution.id, contribution.frontend)
     assertValidHandler(contribution.id, contribution.handle)
+    // §4.7 降级矩阵的最后一行：view / frontend / handle 三者都没给 ⇒ 注册 **fail-loud**。
+    // 放行的话它在界面上是一张点进去什么都没有的卡片——又一种「看起来成功」的失败；
+    // 宁可在注册那一刻响亮报错（该面板的贡献方必须至少选一种接入形态）。
+    if (contribution.view === undefined && contribution.frontend === undefined && contribution.handle === undefined) {
+      throw new Error(
+        `panel "${contribution.id}": 必须至少声明 view / frontend / handle 之一（三者皆无 ⇒ 入口卡片点进去是空的）`,
+      )
+    }
     const declared = contribution.frontend?.assetsDir
     let assetsRoot: string | null = null
     if (declared !== undefined) {

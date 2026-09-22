@@ -17,6 +17,7 @@
   },
   "files": [
     "lib",
+    "web",
     "README.md",
     "dsh-plugin.json"
   ],

@@ -32,8 +32,14 @@ import { createGrowthProfilePanel } from './panels/growth-profile.ts'
 import { createAgentTeamsPanel } from './panels/agent-teams.ts'
 import type { PanelHttpResponse, ViewSpec } from './types.ts'
 
-/** 宿主版本（自检面板与 registry 展示，与 package.json 同步维护）。 */
-export const VERSION = '0.4.0'
+/**
+ * 宿主版本（自检面板与 registry 展示）。
+ *
+ * **必须与 `package.json` 的 `version` 一致**，由 `tests/panel-contract.test.mjs` 断言。
+ * 二者曾经漂移（常量 0.4.0 / 包 0.4.1）且**没有任何判据会亮**：它让 `host.version` 这个对外
+ * 读数变成不可信值，集成时据此把**已经成功的重启**误报为失败。约束要配一条会亮的判据。
+ */
+export const VERSION = '0.4.1'
 
 export const name = 'agent-panel'
 export const inject = ['webServer'] as const
@@ -120,14 +126,37 @@ function html(res: ServerResponse, code: number, body: string): void {
 function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolvePromise, reject) => {
     let body = ''
+    let settled = false
+    /** 结算一次且仅一次（promise 只认第一次，但显式守卫让后续路径不再继续灌数据）。 */
+    const fail = (error: Error): void => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
     req.on('data', (chunk: Buffer) => {
+      if (settled) return
       body += chunk.toString('utf8')
-      if (body.length > 1_000_000) req.destroy()
+      // 超限必须**显式结算**：原实现只 `req.destroy()` 就返回，promise 要等 `'error'` 事件
+      // 才可能结算——若该事件在某些路径下不来，请求就永久悬挂（无响应、无审计）。
+      // 参照同文件 readRawBody 的写法（那里本来就是 reject 结算）。
+      if (body.length > 1_000_000) {
+        fail(new Error('请求体超过 1MB 上限'))
+        req.destroy()
+      }
     })
     req.on('end', () => {
-      try { resolvePromise(JSON.parse(body === '' ? '{}' : body) as Record<string, unknown>) } catch { reject(new Error('请求体不是合法 JSON')) }
+      if (settled) return
+      let parsed: Record<string, unknown>
+      try {
+        parsed = JSON.parse(body === '' ? '{}' : body) as Record<string, unknown>
+      } catch {
+        fail(new Error('请求体不是合法 JSON'))
+        return
+      }
+      settled = true
+      resolvePromise(parsed)
     })
-    req.on('error', reject)
+    req.on('error', (error) => { fail(error instanceof Error ? error : new Error(String(error))) })
   })
 }
 

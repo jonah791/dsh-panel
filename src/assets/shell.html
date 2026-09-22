@@ -189,6 +189,10 @@ button,input{font:inherit}
 .layout{flex:1 1 auto; display:flex; min-height:0}
 
 /* 面包屑（只在该插件视图里出现；首页=入口聚合时隐藏） ----------------- */
+/* [hidden] 的默认 display:none 会被 .crumb{display:flex} 这类规则覆盖 ⇒
+   `dom.crumb.hidden = true` 会**静默失效**（首页漏出「← 全部入口」空面包屑，真浏览器实测发现）。
+   隐藏类元素必须显式兜底，否则"隐藏"只是写了个属性。 */
+[hidden]{display:none !important}
 .crumb{display:flex; align-items:center; gap:10px; margin-bottom:10px; min-width:0}
 .crumb-icon{flex:0 0 auto; font-size:16px; line-height:1}
 .crumb-title{font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
