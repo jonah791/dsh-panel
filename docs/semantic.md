@@ -430,11 +430,24 @@ ctx.panel.register({
   3. 另有一次 `node … | tail; echo $?` 取到的是 `tail` 的退出码、**恒为 0** ⇒ 那个「通过」无分辨力（与 §5.9 规则 2 同型，当场自踩）。
 - **未实现 / 边界（如实）**：§4.7 降级矩阵的「view/frontend/handle 三者都没给 ⇒ 注册 fail-loud」；`web/` 不在 `package.json` 的 `files` 白名单与 copy-assets 范围（本地可用，**打包/发布会丢**）；`VERSION` 常量与包版本不一致；`readBody()` 超 1MB 时 promise 不结算（请求悬挂）。后三条为既有缺陷，本轮仅列出未修。
 
+### 11.12 · 实践修订记录（酒馆面板：三个面都给的接入样本 + 只读取证口径 · 2026-09-22 发布前联动）
+
+- **被实践补充（§4.7 降级矩阵的第三格有了活体样本）**：新增内置面板 `tavern`（`src/panels/tavern.ts` + `web/tavern/index.html`），**view + frontend + handle 三个面同时给**——此前 `audit` 只覆盖「自带前端」这一格。三面的分工在本面板上是显式的：`view()` = 卡片上的轻量摘要（宿主代渲染）、`frontend` = 点进去的自带页（宿主原样托管）、`handle` = `GET /api/panel/tavern/state` 的只读 JSON（宿主反代）。⇒ 契约里「两者都给 ⇒ 卡片 + iframe」这句话第一次有了可点的实例。
+- **数据源（如实登记）**：`<workspace>/tavern/`（主人的创作资产：预设产物清单 + 交接文档 + 素材/文风/剧本素材计数）与 `<selfPluginsDir>/dsh-dream-tavern/scripts/`（同名插件脚本清单）。两者都**只读取证**。
+- **纪律下沉（本面板立的规矩）**：
+  1. **绝不写创作资产**：只做 `existsSync` / `readdirSync` / `statSync`，不 open 写、不 mkdir、不 rename、不 unlink。为此立了**字节级尸体测试**（取数前后递归快照 `name|size|mtimeMs` 必须逐字相同），并在真实 `tavern/` 上复验（819 文件全树哈希取数前后一致）。
+  2. **绝不执行脚本**：`scripts/` 里的 `.mjs` / `.sh` 只列存在性与 mtime——面板不 spawn 任何进程（执行是主体决策，不是面板的副作用）。
+  3. **反代面没有路径输入面**：`handle` 只认固定字面量 `GET /state`，**不接受任何来自请求的路径片段参与拼接**——穿越不是「被校验拦下」，而是不存在。非 GET → 405，未知路径 → 404，数据源缺席 → **503 且带原因**（不回落成一份「全是 0」的假读数）。
+  4. **两个「最新」口径必须分开**：`newestByMtime`（磁盘最后写入，并列时列全）vs `versionLeaders`（**按家族分组**取文件名版本最高）。初版曾做「全局版本最高」，在真实数据上立刻得出 `梦鲸思客V4-0902(A)`（`V4`）比 `色欲之罪V3.4(B)`（`V3.4`）新的伪结论——**跨家族的版本号不是同一坐标系**；测试当场抓住，遂改成家族分组。⇒ 可迁移判据：**凡「排序 / 取最大」的读数，先回答「这几个量在同一个坐标系里吗」**。
+  5. **口径边界写进界面**：资产计数是**文件系统**读数而非「内容资产」读数——`文风/`、`剧本素材/` 含 `.git/`、`__pycache__/` 这类元数据/缓存目录，会被同样计进文件数；这条边界直接印在页面的「来源与口径」块里，而不是留给读者猜。
+- **未验证 / 边界（如实）**：本页**未在真浏览器里打开过**（集成与重启由主 agent 统一做，本轮不重启 web）——`/panel-assets/tavern/index.html` 的静态托管与 `GET /api/panel/tavern/state` 的端到端通路只有**离线证据**（handle 单测 200 / 404 / 405 / 503 四条路径 + 真实数据探针 200·3102 字节），**没有**真浏览器读数的证据。`web/` 不在 `package.json` 的 `files` 白名单这条既有缺陷对本面板同样成立（本地可用，打包会丢）。
+
 ---
 
 ## 11.6 · 与实现的关系
 
-- **主实现**（本文档描述的唯一真源）：`src/index.ts`（插件装配 + webServer 注册）、`src/host.ts`（`PanelHost` Service：注册表/路由/超时/审计）、`src/registry.ts`（注册与 ViewSpec 校验 + `decideDispatch` 判定）、`src/types.ts`（契约类型）、`src/audit.ts`（`audit.jsonl` + paramsDigest）、`src/assets/shell.html`（自包含外壳，零官方 client 依赖）、`src/panels/*.ts`（五个内置面板：plugin-manager / taskboard / growth-profile / agent-teams / audit）、`src/client/index.tsx` + `src/client/jsx-shim.d.ts`（唯一 GUI 入口按钮 + 零依赖 JSX 类型垫片）、`scripts/bundle-client.mjs`（客户端产物协议打包）。
+- **主实现**（本文档描述的唯一真源）：`src/index.ts`（插件装配 + webServer 注册）、`src/host.ts`（`PanelHost` Service：注册表/路由/超时/审计）、`src/registry.ts`（注册与 ViewSpec 校验 + `decideDispatch` 判定）、`src/types.ts`（契约类型）、`src/audit.ts`（`audit.jsonl` + paramsDigest）、`src/assets/shell.html`（自包含外壳，零官方 client 依赖）、`src/panels/*.ts`（六个内置面板：plugin-manager / taskboard / growth-profile / agent-teams / audit / tavern）、`src/client/index.tsx` + `src/client/jsx-shim.d.ts`（唯一 GUI 入口按钮 + 零依赖 JSX 类型垫片）、`scripts/bundle-client.mjs`（客户端产物协议打包）。
+- **自带前端资产**（§4.7：宿主只托管不解析）：`web/audit/index.html`（首个正样本）、`web/tavern/index.html`（酒馆面板，`view`/`frontend`/`handle` 三面同时给的样本）。
 - **消费方实现**（非副本，各自独立）：`self-plugins/dsh-growth-profile/src/panel.ts`（首个消费方；不 import 宿主类型，用本地结构类型 + `ctx.inject(['panel'])` 接入）。
 - **同语义副本**：无——本能力单实现单仓库；跨插件协作走**契约**（§4.1/§4.2/§4.3）而非复制源码。
 - **未实现 / 未验证（显式标注）**：M3 的官方 `index-inject` 导航入口（未做，见 §6）；SSE 实时推送（v0.1 走轮询，见 U）；`ctx.panel` 的对外发布与命名规范（未做）。
@@ -452,3 +465,4 @@ ctx.panel.register({
 | v0.4 | 2026-09-13 | **写入通道 + 审计页 + 零依赖构建**（插件 0.2.0 → **0.3.0**）：§6.1 产物协议改为 `tsc` + `bundle-client.mjs`（去 tsdown 借依赖，JSX 垫片）；§8 新增 M2+ 行（Panel #5 `audit`、taskboard 五个动作、删除两层拒绝）；§9 新增 #11/#12/#13（写入安全尸体测试 / 审批门两层 / 审计面板边界），计数 6/13；§11.6 补 `panels/*` 与打包脚本；新增 §11.8 实践修订记录（5 条）；§0 偏离日志新增构建链一行 |
 | v0.5 | 2026-09-13 | **皮肤层 + 表现力块族**（插件 **0.4.0**，主人定调"前端可以更自由"）：新增 §4.6（设计令牌 + 三套皮肤 ink/terminal/paper + `?theme=` 优先 + `PanelStyle{accent,density}` 形状校验 fail-loud + 刷新不抢用户输入的纪律）；§4.2 新增 `form`/`chart`/`log`/`progress`/`tabs` 五种块与形状校验条款；§9 新增 #14/#15（计数 11/15）；新增 §11.9 实践修订记录（5 条：定调落地 / 刷新抢输入缺陷 / 导航重复项 / 图表观感 / 界面必须先看一眼） |
 | **v0.6** | 2026-09-22 | **定位反转：渲染器 → 中转站**（主人定调「各插件前端都应该不同…就类似中转站」+「别做成 tab 页」）：§1/§2/§3 重写（**呈现权威归还插件**，`ViewSpec` 降级为可选轻量模式）；新增 **§4.7 前端接入契约**（三条 `[MUST]` + 降级兼容矩阵）；§4.4 新增 `GET /panel-assets/<id>/…` 与 `ANY /api/panel/<id>/*`；§7.3 体积预算改写为**活约束**（原「≤60KB」早已失效且无人察觉）；§9 新增 #16/#17（前端接入两条通路，计数 13/17）、并**修正 #9 的假绿**；新增 §11.11 实践修订记录（6 条）；实现层新增 `src/frontend.ts`（纯逻辑可离线测）与 `web/audit/`（首个自带前端正样本，让两条通路有正样本可验收） |
+| （同版） | 2026-09-22 | **酒馆面板（三个面都给）**：新增内置面板 `tavern`（`src/panels/tavern.ts` + `web/tavern/index.html` + `src/index.ts` 注册 + `tests/tavern-panel.test.mjs`），数据源 = `tavern/`（主人创作资产，只读）与 `dsh-dream-tavern/scripts/`（只列不执行）；新增 §11.12 实践修订记录（5 条纪律 + 未验证边界）。**不改 §4.7 契约本身**——它是该契约「view + frontend + handle 三面同时给」这一格的第一个活体样本 |

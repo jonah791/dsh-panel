@@ -28,6 +28,7 @@ import { createPluginManagerPanel } from './panels/plugin-manager.ts'
 import type { PluginManagerDeps } from './panels/plugin-manager.ts'
 import { createTaskboardPanel } from './panels/taskboard.ts'
 import { createAuditPanel } from './panels/audit.ts'
+import { createTavernPanel } from './panels/tavern.ts'
 import { createGrowthProfilePanel } from './panels/growth-profile.ts'
 import { createAgentTeamsPanel } from './panels/agent-teams.ts'
 import type { PanelHttpResponse, ViewSpec } from './types.ts'
@@ -305,6 +306,14 @@ export function apply(ctx: Context, config: Config): void {
   // 内置面板 #5：面板审计（只读）——把宿主自己的派发审计（DSH_HOME/panel/audit.jsonl）
   // 变成可看的一页：安全机制不可观测时，无人能回答「它到底拦了什么」。
   ctx.effect(() => host.register(createAuditPanel({ panelDir })), 'dsh-panel: builtin audit')
+
+  // 内置面板 #6：酒馆（色欲之罪）· 只读。
+  // 数据源是**主人的创作资产**（`tavern/`）与同名插件的脚本清单：面板只 stat/readdir，
+  // 不写一个字节、不执行任何脚本（创作资产只在主人的通道里改）。
+  // 它是 §4.7 降级矩阵里信息量最大的一格——view + frontend + handle 三个面都给。
+  const tavernDir = join(workspace, 'tavern')
+  const dreamTavernDir = join(selfPluginsDirOf(config), 'dsh-dream-tavern')
+  ctx.effect(() => host.register(createTavernPanel({ tavernDir, dreamTavernDir })), 'dsh-panel: builtin tavern')
 
   // ---------- 页面 ----------
   const serveShell = (_req: IncomingMessage, res: ServerResponse): void => {

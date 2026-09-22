@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>酒馆（色欲之罪）· 自带前端</title>
+<!--
+  ============================================================================
+  酒馆面板 · 插件自带前端（dsh-panel v0.5「中转站」· 三个面都给的正样本）
+  ============================================================================
+  这一页存在的理由：
+    1. 把主人的创作资产（tavern/ 的预设产物 / 交接文档 / 素材·文风·剧本素材 / 同名插件脚本）
+       的**真实状态**变成一眼可看的一页——此前只能靠一次次 ls 取证；
+    2. 给 §4.7 的「自带前端」通路再加一个正样本：本页由宿主从
+       /panel-assets/tavern/index.html 原样送出，数据取自 /api/panel/tavern/state
+       （本面板自己 handle() 应答），宿主不解析、不注入、不重写。
+
+  纪律：
+    - 零外部依赖（本文件不引用任何 CDN / 字体 / 脚本），CSS 全部自己写，
+      不依赖宿主外壳的 class——「前端形态归插件」必须是真的；
+    - 只读取证：本页只发一个 GET，没有任何写通道；
+    - 失败要响亮：反代不通 / 数据源缺席（503）都在页面上如实显示，不假装成功。
+  ============================================================================
+-->
+<style>
+  :root {
+    --bg: #0f1117; --fg: #e6e8ee; --muted: #9aa3b2; --card: #171a22;
+    --border: #262b36; --accent: #fb7185; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    --ok: #34d399; --warn: #fbbf24; --bad: #f87171;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f7f8fa; --fg: #1b1f27; --muted: #5c6675; --card: #fff; --border: #e2e5ea; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px 20px 28px; background: var(--bg); color: var(--fg);
+    font: 14px/1.6 system-ui, -apple-system, "Segoe UI", "Noto Sans SC", sans-serif;
+  }
+  h1 { margin: 0 0 4px; font-size: 17px; font-weight: 600; }
+  h2 { margin: 18px 0 8px; font-size: 13.5px; font-weight: 600; color: var(--fg); }
+  .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 14px; }
+  .note {
+    background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: 6px; padding: 10px 12px; margin-bottom: 14px; color: var(--muted); font-size: 12.5px;
+  }
+  .note code { font-family: var(--mono); color: var(--fg); }
+  .bar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  button {
+    background: var(--card); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  .status { color: var(--muted); font-size: 12.5px; font-family: var(--mono); }
+  .status.bad { color: var(--bad); }
+  .status.ok { color: var(--ok); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+  .mcard {
+    background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+    padding: 9px 11px; min-width: 0;
+  }
+  .mcard .k { color: var(--muted); font-size: 11.5px; }
+  .mcard .v {
+    font-family: var(--mono); font-size: 15px; margin-top: 2px;
+    overflow-wrap: anywhere;
+  }
+  .mcard .h { color: var(--muted); font-size: 11px; font-family: var(--mono); margin-top: 2px; overflow-wrap: anywhere; }
+  .v.ok { color: var(--ok); } .v.warn { color: var(--warn); } .v.bad { color: var(--bad); } .v.muted { color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border); font-size: 12.5px; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; }
+  td.mono, td.num { font-family: var(--mono); }
+  td.num { text-align: right; }
+  tr:last-child td { border-bottom: 0; }
+  .tag {
+    display: inline-block; border: 1px solid var(--border); border-radius: 4px;
+    padding: 0 5px; font-size: 11px; color: var(--muted); margin-right: 4px;
+  }
+  .tag.new { border-color: var(--accent); color: var(--accent); }
+  .empty { padding: 14px; color: var(--muted); background: var(--card); border: 1px solid var(--border); border-radius: 6px; }
+  .err { border-color: var(--bad); border-left-color: var(--bad); color: var(--bad); }
+  ul.notes { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; }
+  ul.notes li { margin-bottom: 3px; }
+  ul.notes li.warnline { color: var(--warn); }
+</style>
+</head>
+<body>
+  <h1>酒馆（色欲之罪）· 自带前端</h1>
+  <div class="sub">tavern/ 创作资产的只读状态 · 本页与数据均由本面板自己提供（宿主只做入口聚合 / 静态托管 / 请求反代）</div>
+
+  <div class="note">
+    静态托管：<code>/panel-assets/tavern/index.html</code>（宿主原样送出本文件，零外部依赖）<br>
+    请求反代：<code>/api/panel/tavern/state</code>（只读 JSON，本面板 <code>handle()</code> 应答）<br>
+    只读取证：本面板对 <code>tavern/</code> 只做 <code>stat/readdir</code>，<b>不写任何创作资产、不执行任何脚本</b>。
+  </div>
+
+  <div class="bar">
+    <button id="reload">重新取数</button>
+    <span class="status" id="status">就绪</span>
+  </div>
+
+  <div id="host"><div class="empty">加载中…</div></div>
+
+<script>
+  var out = document.getElementById('host');
+  var status = document.getElementById('status');
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function setStatus(text, tone) {
+    status.textContent = text;
+    status.className = 'status' + (tone ? ' ' + tone : '');
+  }
+
+  function humanBytes(n) {
+    if (typeof n !== 'number' || !isFinite(n)) return '—';
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1048576).toFixed(2) + ' MB';
+  }
+
+  function stamp(mtime) {
+    return mtime ? String(mtime).slice(0, 16).replace('T', ' ') : '—';
+  }
+
+  function toneClass(tone) {
+    return tone ? ' ' + esc(tone) : '';
+  }
+
+  function metric(label, value, hint, tone) {
+    return '<div class="mcard">'
+      + '<div class="k">' + esc(label) + '</div>'
+      + '<div class="v' + toneClass(tone) + '">' + esc(value) + '</div>'
+      + (hint ? '<div class="h">' + esc(hint) + '</div>' : '')
+      + '</div>';
+  }
+
+  function table(headers, rows, monocols, numcols) {
+    if (!rows.length) return '<div class="empty">（空）</div>';
+    var html = '<table><thead><tr>';
+    for (var i = 0; i < headers.length; i++) {
+      var cls = numcols.indexOf(i) >= 0 ? ' class="num"' : '';
+      html += '<th' + cls + '>' + esc(headers[i]) + '</th>';
+    }
+    html += '</tr></thead><tbody>';
+    for (var r = 0; r < rows.length; r++) {
+      html += '<tr>';
+      for (var c = 0; c < rows[r].length; c++) {
+        var cls2 = numcols.indexOf(c) >= 0 ? ' class="num"' : (monocols.indexOf(c) >= 0 ? ' class="mono"' : '');
+        html += '<td' + cls2 + '>' + rows[r][c] + '</td>'; // 单元格内容由调用方 esc()（标记列要放 HTML 徽标）
+      }
+      html += '</tr>';
+    }
+    return html + '</tbody></table>';
+  }
+
+  function render(state) {
+    var p = state.project;
+    var newest = p.newestByMtime || [];
+    var leaders = p.versionLeaders || [];
+    var lastMtime = p.presets.length ? p.presets[0].mtime : null;
+    var assetFiles = 0, assetBytes = 0;
+    for (var i = 0; i < state.assets.length; i++) { assetFiles += state.assets[i].files; assetBytes += state.assets[i].bytes; }
+    var leaderTags = [];
+    for (var li = 0; li < leaders.length; li++) leaderTags.push(leaders[li].family + ' V' + leaders[li].version);
+
+    var html = '<div class="cards">';
+    html += metric('预设产物', String(p.presets.length), 'tavern/*.json', p.presets.length ? 'ok' : 'warn');
+    html += metric('家族版本冠军', String(leaders.length), leaderTags.join(' · ') || '无带版本号的文件名', leaders.length ? 'ok' : 'muted');
+    html += metric('最后写入', newest.length ? newest[0] : '—', stamp(lastMtime) + ' UTC', newest.length ? 'ok' : 'muted');
+    html += metric('交接文档', state.handover.exists ? humanBytes(state.handover.bytes) : '缺失',
+      state.handover.exists ? (stamp(state.handover.mtime) + ' UTC · ' + state.handover.ageDays + ' 天前') : state.handover.path,
+      state.handover.exists ? 'ok' : 'warn');
+    html += metric('资产文件', String(assetFiles), humanBytes(assetBytes) + '（递归）', assetFiles ? 'ok' : 'warn');
+    html += metric('插件脚本', String(state.scripts.files.length), stamp(state.scripts.newest ? state.scripts.newest.mtime : null) + ' UTC', state.scripts.exists ? 'ok' : 'warn');
+    html += '</div>';
+
+    html += '<h2>预设产物（tavern/*.json，按最后写入降序）</h2>';
+    var presRows = [];
+    var leaderNames = {};
+    for (var ln = 0; ln < leaders.length; ln++) leaderNames[leaders[ln].name] = true;
+    for (var j = 0; j < p.presets.length; j++) {
+      var f = p.presets[j];
+      var tags = '';
+      if (newest.indexOf(f.name) >= 0) tags += '<span class="tag new">最新写入</span>';
+      if (leaderNames[f.name]) tags += '<span class="tag">家族版本最高</span>';
+      presRows.push([
+        esc(f.name), esc(f.version == null ? '—' : f.version), esc(f.bytes), esc(humanBytes(f.bytes)),
+        esc(stamp(f.mtime)), esc(ageText(f.mtime)), tags,
+      ]);
+    }
+    html += table(['文件', '文件名版本', '字节', '大小', '最后写入(UTC)', '新鲜度', '标记'],
+      presRows, [0, 4, 5], [2, 3]);
+
+    html += '<h2>资产计数（递归文件数；符号链接不跟随）</h2>';
+    var assetRows = [];
+    for (var k = 0; k < state.assets.length; k++) {
+      var a = state.assets[k];
+      var st = a.exists ? (a.errors.length ? ('有 ' + a.errors.length + ' 条读取错误') : 'ok') : '目录缺失';
+      assetRows.push([esc(a.name + '/'), esc(a.files), esc(a.bytes), esc(humanBytes(a.bytes)), esc(st)]);
+    }
+    html += table(['目录', '文件数', '字节', '大小', '状态'], assetRows, [0], [1, 2, 3]);
+
+    html += '<h2>同名插件脚本（dsh-dream-tavern/scripts/ · 只列存在性与新鲜度，不执行）</h2>';
+    var scrRows = [];
+    for (var m = 0; m < state.scripts.files.length; m++) {
+      var s = state.scripts.files[m];
+      scrRows.push([esc(s.name), esc(s.bytes), esc(stamp(s.mtime)), esc(ageText(s.mtime))]);
+    }
+    html += table(['文件', '字节', '最后写入(UTC)', '新鲜度'], scrRows, [0, 2, 3], [1]);
+
+    html += '<h2>来源与口径</h2>';
+    var notes = state.notes || [];
+    var list = '<ul class="notes">';
+    for (var n = 0; n < notes.length; n++) {
+      var line = String(notes[n]);
+      list += '<li' + (line.indexOf('⚠') >= 0 || line.indexOf('错误') >= 0 ? ' class="warnline"' : '') + '>' + esc(line) + '</li>';
+    }
+    html += list + '</ul>';
+
+    var errs = state.errors || [];
+    if (errs.length) {
+      html += '<h2>读取错误（取数成功但有条目读不到——数字会因此偏小，别当完整读数看）</h2>';
+      html += '<div class="empty err">' + errs.map(esc).join('<br>') + '</div>';
+    }
+
+    out.innerHTML = html;
+  }
+
+  function ageText(mtime) {
+    if (!mtime) return '—';
+    var ms = Date.now() - Date.parse(mtime);
+    if (!isFinite(ms) || ms <= 0) return '0 天前';
+    var days = Math.round((ms / 86400000) * 10) / 10;
+    return days + ' 天前';
+  }
+
+  function load() {
+    setStatus('取数中…', '');
+    fetch('/api/panel/tavern/state', { headers: { accept: 'application/json' } })
+      .then(function (res) {
+        return res.json().catch(function () { return null; }).then(function (data) {
+          if (!res.ok || !data || !data.ok) {
+            var why = (data && data.error) ? data.error : ('HTTP ' + res.status);
+            throw new Error(why);
+          }
+          return data.state;
+        });
+      })
+      .then(function (state) {
+        var errs = state.errors || [];
+        setStatus('已取数 · ' + new Date().toLocaleTimeString() + ' · 数据源时刻 ' + stamp(state.generatedAt) + ' UTC'
+          + (errs.length ? ' · ⚠ ' + errs.length + ' 条读取错误' : ''), errs.length ? '' : 'ok');
+        render(state);
+      })
+      .catch(function (err) {
+        setStatus('取数失败：' + err.message, 'bad');
+        out.innerHTML = '<div class="empty err">反代通路取数失败：' + esc(err.message)
+          + '<br>（503 = 数据源缺席；404 = 宿主未接线 /api/panel/tavern/*。本页不假装成功。）</div>';
+      });
+  }
+
+  document.getElementById('reload').addEventListener('click', load);
+  load();
+</script>
+</body>
+</html>
