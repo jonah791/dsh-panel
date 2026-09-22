@@ -14,28 +14,40 @@
   <a href="https://github.com/jonah791/dsh-panel"><img src="https://img.shields.io/badge/version-0.4.0-blue" alt="version"></a>
   <img src="https://img.shields.io/badge/License-MIT-green" alt="license">
   <img src="https://img.shields.io/badge/TypeScript-3178C6" alt="TypeScript">
-  <img src="https://img.shields.io/badge/tests-51%20passed-brightgreen" alt="tests">
+  <img src="https://img.shields.io/badge/tests-56%20passed-brightgreen" alt="tests">
 </p>
 
-**一句话**：把「每个插件各写一套前端」收敛成「每个插件提交一份声明」的**前端宿主**——一个 URL（`http://127.0.0.1:3080/panel/`）、一套外壳、一张注册表；贡献方只提供视图规格（ViewSpec）+ 动作表（Action ABI），宿主负责渲染、派发、**审计**、**实测健康**与降级。
+**一句话**：把各插件**各自不同的前端**聚合到一处入口（一屏按钮/卡片），并把请求**转发**给对应插件的**中转站**——一个 URL（`http://127.0.0.1:3080/panel/`）、一套外壳、一张注册表；宿主**不规定插件前端长什么样**：贡献方可以**自带前端**（静态资源 + 自己的数据接口，宿主原样托管与反代、不解析不注入不重写），也可以只提交**声明**（ViewSpec + 动作表）由宿主以「轻量模式」渲染。
 
-**为什么值得用**：自研前端散落各处时，没有人能回答「谁在什么时候对哪个页面做了什么」——安全机制不可观测就等于不存在。本插件把「渲染 / 派发 / 审计 / 实测健康」四件事收进一个宿主：**贡献方声明即 effect**（插件卸载面板立刻消失，无幽灵），**未知动作零副作用**，**破坏性动作要二次确认**，**触及「须请示三类」的动作宿主直接拒绝并转请示通道**。而且它**零官方 client 依赖**——官方前端坏了，面板照常可用。
+**为什么值得用**：自研前端散落各处时，没有人能回答「谁在什么时候对哪个页面做了什么」——安全机制不可观测就等于不存在。本插件把「入口聚合 / 静态托管 / 请求反代 / 派发 / 审计 / 实测健康」收进一个宿主，同时**不剥夺插件对自己前端的支配权**：**贡献方声明即 effect**（插件卸载面板立刻消失，无幽灵），**未知动作零副作用**，**破坏性动作要二次确认**，**触及「须请示三类」的动作宿主直接拒绝并转请示通道**。而且它**零官方 client 依赖**——官方前端坏了，面板照常可用。
+
+> ⚠ **定位沿革（诚实记录）**：v0.4 及以前，宿主是**唯一渲染者**（「每个插件提交一份声明，宿主负责渲染」）。2026-09-22 主人定调「面板插件不是让前端格式锁死，而是因为需要**聚合**。**各个插件前端都应该不同**。就类似**中转站**」+「别做成 tab 页」⇒ 定位反转为**入口聚合 + 静态托管 + 请求反代**，呈现权威归还插件，`ViewSpec` 降级为可选轻量模式。详见 [`docs/semantic.md`](docs/semantic.md) §11.10/§11.11。
 
 ## 能力
 
-**宿主职责**：托管外壳与静态资源 · 维护注册表（含实测健康）· 把贡献方的 `view()` 渲染成视图规格 · 按动作 ABI 派发并**每次落一条审计** · 施加超时与降级。
+**宿主职责**：托管外壳与插件静态资源（`/panel-assets/<id>/…`，**按插件根**做穿越校验）· 把插件数据请求反代给它自己的 `handle`（`/api/panel/<id>/*`；未声明 → **404 不回落不猜测**）· 维护注册表（含实测健康）· 把只给声明的贡献 `view()` 渲染成视图规格（轻量模式）· 按动作 ABI 派发并**每次落一条审计** · 施加超时与降级。
 
 **接入契约**（消费方视角；完整签名见 [`docs/semantic.md`](docs/semantic.md) §4）：
 
 ```ts
 // 必须用 ctx.inject 等待宿主（不得用 ctx.get('panel') 一次性探测——加载顺序会让它拿到 undefined 且永不重试）
 ctx.inject(['panel'], (panelCtx) => {
+  // 三种接入形态（§4.7 降级矩阵）：只给 view ⇒ 轻量模式；只给 frontend/handle ⇒ 全托管；
+  // 都给 ⇒ 入口卡片点进去加载你自带的前端，view() 仅供宿主做聚合摘要。三者皆无 ⇒ 注册 fail-loud。
   panelCtx.panel.register({
     id: 'my-panel',                 // 全局唯一 [a-z0-9-]+，重复注册 fail-loud
     title: '我的面板',
-    order: 100,                     // 导航排序（小→前）
-    icon: 'plug',                   // 宿主图标白名单键（非自由 SVG）
-    description: '一句话用途',       // 自检面板展示
+    order: 100,                     // 入口卡片排序（小→前）
+    icon: 'plug',                   // **语义名**（宿主渲染成字母徽标），不是自由 SVG/emoji
+    description: '一句话用途',
+
+    // ── 形态 A：自带前端（宿主原样托管，不解析、不注入、不重写）──
+    frontend: { assetsDir: 'web/my-panel', entry: 'index.html' },  // assetsDir 相对**你的插件根**（推荐用绝对路径显式给出）
+    handle: (req) => ({ status: 200, headers: { 'content-type': 'application/json' }, body: '{}' }),
+    // handle 收到的是**纯数据**信封 {method,path,query,headers,body}（不给 Node 原生 req/res）——
+    // 于是你的数据面可以脱离 HTTP 服务器被离线单测。
+
+    // ── 形态 B：只提交声明（宿主以「轻量模式」渲染）──
     view: async (params) => ViewSpec,
     actions: { /* 动作表 */ },
     style: { accent: '#f472b6' },   // 可选：自带视觉（宿主只认 token，不认自由 CSS）
@@ -179,13 +191,13 @@ npm test        # = node --test "tests/*.test.mjs"
 - **只读可宽容，写入必须苛刻**：板面解析失败时**拒绝写入**（写前写后字节相同），否则空板会覆盖真实数据；读取时坏行跳过并计数即可。
 - **审批门优先于确认门**：触及「须请示三类」（删数据/动凭据/动核心引擎）的动作，即使调用方带了 `confirm:true` 也**拒绝派发**（`requires-approval`）——宿主不得成为绕过主体性铁律的通道。
 - **审计是安全机制的可观测面**：被拦下的动作也写行（`denied`），并且**参数只落摘要**（`paramsDigest`）不落原文——记录了「做过什么」又不制造新的泄露面。
-- **零官方 client 依赖**：外壳是自包含资源（本机实测 `lib/assets/shell.html` 79,729 字节，`/panel/` 一次返回 72,949 字符、`cache-control: no-store`），构建期才需要 Node 脚本——官方前端坏了面板照常可用，代价是自带一套资源与构建步骤。
+- **零官方 client 依赖**：外壳是自包含资源（本机实测 `lib/assets/shell.html` **97,311 字节**，`/panel/` 一次返回 97,311 字符、`cache-control: no-store`），构建期才需要 Node 脚本——官方前端坏了面板照常可用，代价是自带一套资源与构建步骤。
 
 ## 相关文档
 
 | 文档 | 内容 |
 |------|------|
-| [`docs/semantic.md`](docs/semantic.md) | **权威契约（284 行）**：定位与负边界、术语、概念模型、**注册契约 / 视图规格 / 动作 ABI / HTTP 面 / 失效降级 / 皮肤层（逐条 `[MUST]`）**、信任与安全边界（含能力诚实声明）、与官方 GUI 的关系、迁移路径、**可证伪验收 15 条（已证 11 · 待线上 4）**、未决问题 Q1–Q6 |
+| [`docs/semantic.md`](docs/semantic.md) | **权威契约（453 行）**：定位与负边界、术语、概念模型、**注册契约 / 视图规格 / 动作 ABI / HTTP 面 / 前端接入契约 §4.7 / 失效降级 / 皮肤层（逐条 `[MUST]`）**、信任与安全边界（含能力诚实声明）、与官方 GUI 的关系、迁移路径、**可证伪验收 17 条（已证 13 · 待线上 4）**、未决问题 |
 | [alice-digital-life](https://github.com/jonah791/alice-digital-life) | 本插件所属生态的中心索引（全部自研插件） |
 | 技能 `ui-visual-verification` | 界面视觉与交互验收（几何/对比度/跨刷新状态/真实副作用四类断言 + 截图复核清单）——**单测全绿时三个缺陷全靠看图发现的教训** |
 | 技能 `dsh-panel-plugin` | 面板插件开发方法论（webServer 托管 + 独立资源 + 同源 fetch + 命名规范），本插件的前身 |
