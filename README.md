@@ -14,7 +14,7 @@
   <a href="https://github.com/jonah791/dsh-panel"><img src="https://img.shields.io/badge/version-0.4.0-blue" alt="version"></a>
   <img src="https://img.shields.io/badge/License-MIT-green" alt="license">
   <img src="https://img.shields.io/badge/TypeScript-3178C6" alt="TypeScript">
-  <img src="https://img.shields.io/badge/tests-56%20passed-brightgreen" alt="tests">
+  <img src="https://img.shields.io/badge/tests-65%20passed-brightgreen" alt="tests">
 </p>
 
 **一句话**：把各插件**各自不同的前端**聚合到一处入口（一屏按钮/卡片），并把请求**转发**给对应插件的**中转站**——一个 URL（`http://127.0.0.1:3080/panel/`）、一套外壳、一张注册表；宿主**不规定插件前端长什么样**：贡献方可以**自带前端**（静态资源 + 自己的数据接口，宿主原样托管与反代、不解析不注入不重写），也可以只提交**声明**（ViewSpec + 动作表）由宿主以「轻量模式」渲染。
