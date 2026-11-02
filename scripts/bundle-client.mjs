@@ -57,6 +57,7 @@ if (!existsSync(join(root, 'tsconfig.client.build.json'))) {
 // ① 先清后编：陈旧模块若残留，会被打进 bundle 且难以察觉
 rmSync(buildDir, { recursive: true, force: true })
 const compiled = spawnSync(process.execPath, [tsc, '-p', 'tsconfig.client.build.json'], {
+  windowsHide: true,
   cwd: root,
   stdio: 'inherit',
 })
