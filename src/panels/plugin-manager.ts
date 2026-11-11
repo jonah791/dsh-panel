@@ -175,7 +175,13 @@ function writeAtomic(file: string, content: string): void {
 export function patchSetDisabled(patchFile: string, name: string, disabled: boolean): { ok: boolean; error?: string } {
   try {
     const lines = readFileSync(patchFile, 'utf8').split(/\r?\n/)
-    const nameIdx = lines.findIndex((l) => l.trim() === `name: ${name}`)
+    // name 值可能是带引号的（本 profile 真实写法就是 `name: 'ds-harness-remote'`）——
+    // 严格相等匹配会让这个开关对最重要的插件**根本找不到行**，返回「未找到」。
+    const unquote = (v: string): string => v.replace(/^(['"])(.*)\1$/, '$2')
+    const nameIdx = lines.findIndex((l) => {
+      const m = /^\s*name:\s*(.+?)\s*$/.exec(l)
+      return m !== null && unquote(m[1] ?? '') === name
+    })
     if (nameIdx === -1) return { ok: false, error: `patch 中未找到 name: ${name}` }
     let blockStart = nameIdx
     while (blockStart > 0) {
@@ -193,13 +199,23 @@ export function patchSetDisabled(patchFile: string, name: string, disabled: bool
       blockEnd += 1
     }
     const block = lines.slice(blockStart, blockEnd + 1)
-    const disIdx = block.findIndex((l) => /^\s*disabled:/.test(l.trim()))
-    const indent = '        '
-    if (disIdx >= 0) lines[blockStart + disIdx] = `${indent}disabled: ${disabled}`
+    // 缩进只能从数据里取，不能写死。这里曾经硬编码 '        '（8 空格），而 patch 里兄弟键的
+    // 真实缩进是「`- id:` 行的缩进 + 2」（顶层 2 / `- insert:` 容器 6）——结果写出的 patch 是
+    // 非法 YAML（PyYAML: ScannerError），而函数照样返回 ok:true。所以判据不能是「返回了 ok」，
+    // 必须是「写出的文件能被解析」。
+    const indentOf = (l: string): string => /^(\s*)/.exec(l)?.[1] ?? ''
+    const idMatch = /^(\s*)-\s*id:/.exec(lines[blockStart] ?? '')
+    // 找到 `- id:` 就以它为准（dashIndent + 2）；否则退回 name 行自身的缩进。
+    const siblingIndent = idMatch ? `${idMatch[1]}  ` : indentOf(lines[nameIdx] ?? '')
+    const isSiblingKey = (l: string, key: string): boolean =>
+      indentOf(l) === siblingIndent && l.trim().startsWith(`${key}:`)
+    // 只认兄弟层的 disabled:：config 内部同名键不是它，改它等于改错字段。
+    const disIdx = block.findIndex((l) => isSiblingKey(l, 'disabled'))
+    if (disIdx >= 0) lines[blockStart + disIdx] = `${siblingIndent}disabled: ${disabled}`
     else {
-      const cfgIdx = block.findIndex((l) => /^\s*config:/.test(l.trim()))
-      if (cfgIdx >= 0) lines.splice(blockStart + cfgIdx, 0, `${indent}disabled: ${disabled}`)
-      else lines.splice(blockEnd + 1, 0, `${indent}disabled: ${disabled}`)
+      const cfgIdx = block.findIndex((l) => isSiblingKey(l, 'config'))
+      if (cfgIdx >= 0) lines.splice(blockStart + cfgIdx, 0, `${siblingIndent}disabled: ${disabled}`)
+      else lines.splice(blockEnd + 1, 0, `${siblingIndent}disabled: ${disabled}`)
     }
     writeAtomic(patchFile, lines.join('\n'))
     return { ok: true }
